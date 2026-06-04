@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import crypto from 'crypto';
+import Core from '@alicloud/pop-core';
 
 dotenv.config();
 
@@ -190,18 +191,90 @@ function getActualTableName(db_name) {
   return mapping[db_name] || `yizi_${db_name}`;
 }
 
-// STS Upload Route (defined before wildcards to avoid intercepting)
-app.post('/admin/sts', authenticateToken, async (req, res) => {
-    // Return mock STS token for now. In production, request from Aliyun
-    res.json({
-        msg: 'ok',
-        result: {
-            AccessKeyId: 'mock_ak',
-            AccessKeySecret: 'mock_sk',
-            SecurityToken: 'mock_token',
-            Expiration: new Date(Date.now() + 3600000).toISOString()
-        }
+// Helper to get Aliyun OSS STS Token or fallback to primary credentials
+async function getOSSToken(openid = null, order_id = null) {
+  const accessKeyId = process.env.OSS_ACCESS_KEY_ID;
+  const accessKeySecret = process.env.OSS_ACCESS_KEY_SECRET;
+  const roleArn = process.env.OSS_ROLE_ARN;
+  const bucket = process.env.OSS_BUCKET;
+  const region = process.env.OSS_REGION; // e.g. oss-cn-hangzhou
+
+  if (!accessKeyId || !accessKeySecret || !bucket || !region) {
+    throw new Error('后端未配置 OSS 环境变量 (OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET, OSS_REGION)');
+  }
+
+  if (roleArn) {
+    const client = new Core({
+      accessKeyId,
+      accessKeySecret,
+      endpoint: 'https://sts.aliyuncs.com',
+      apiVersion: '2015-04-01'
     });
+
+    const params = {
+      "RegionId": region.replace('oss-', ''), // e.g. cn-hangzhou
+      "RoleArn": roleArn,
+      "RoleSessionName": "yizi_studio_session",
+      "DurationSeconds": 3600
+    };
+
+    if (openid && order_id) {
+      const policy = {
+        Version: '1',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Action: ['oss:PutObject', 'oss:GetObject'],
+            Resource: [`acs:oss:*:*:${bucket}/delivery_imgs/${openid}/${order_id}/*`]
+          }
+        ]
+      };
+      params.Policy = JSON.stringify(policy);
+    }
+
+    const response = await client.request('AssumeRole', params, { method: 'POST' });
+    if (response && response.Credentials) {
+      return {
+        region,
+        bucket,
+        accessKeyId: response.Credentials.AccessKeyId,
+        accessKeySecret: response.Credentials.AccessKeySecret,
+        stsToken: response.Credentials.SecurityToken
+      };
+    }
+    throw new Error('获取阿里云 STS 凭证失败');
+  }
+
+  // Fallback to primary credentials if roleArn is not configured
+  return {
+    region,
+    bucket,
+    accessKeyId,
+    accessKeySecret
+  };
+}
+
+// STS Upload Route for general tmps upload
+app.post('/admin/sts', authenticateToken, async (req, res) => {
+  try {
+    const token = await getOSSToken();
+    res.json({ msg: 'ok', result: token });
+  } catch (error) {
+    console.error('[STS General Error]', error);
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// STS Upload Route for order delivery images upload
+app.post('/admin/oss_delivery_imgs/upload/sts', authenticateToken, async (req, res) => {
+  const { openid, order_id } = req.body;
+  try {
+    const token = await getOSSToken(openid, order_id);
+    res.json({ msg: 'ok', result: token });
+  } catch (error) {
+    console.error('[STS Order Error]', error);
+    res.json({ msg: 'err', info: error.message });
+  }
 });
 
 // 2. RPC Main Channel
