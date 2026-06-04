@@ -165,10 +165,51 @@ async function getPrimaryKeyColumn(tableName) {
   }
 }
 
+// Helper to map route db_name to actual database table name
+function getActualTableName(db_name) {
+  if (!db_name) return db_name;
+  if (db_name.startsWith('yizi_')) {
+    return db_name;
+  }
+  
+  const mapping = {
+    'orders': 'yizi_orders',
+    'workflow_logs': 'yizi_workflow_logs',
+    'workflow': 'yizi_workflow',
+    'sku': 'yizi_sku',
+    'user': 'yizi_users',      // user -> yizi_users
+    'case': 'yizi_cases',      // case -> yizi_cases
+    'model': 'yizi_model',
+    'prompt': 'yizi_prompt',
+    'vip_settings': 'yizi_vip_settings',
+    'comments': 'yizi_comments',
+    'front_sku_settings': 'yizi_front_sku_settings',
+    'oss_delivery_imgs': 'yizi_oss_delivery_imgs'
+  };
+  
+  return mapping[db_name] || `yizi_${db_name}`;
+}
+
+// STS Upload Route (defined before wildcards to avoid intercepting)
+app.post('/admin/sts', authenticateToken, async (req, res) => {
+    // Return mock STS token for now. In production, request from Aliyun
+    res.json({
+        msg: 'ok',
+        result: {
+            AccessKeyId: 'mock_ak',
+            AccessKeySecret: 'mock_sk',
+            SecurityToken: 'mock_token',
+            Expiration: new Date(Date.now() + 3600000).toISOString()
+        }
+    });
+});
+
 // 2. RPC Main Channel
 // Action path example: /admin/orders/list, /admin/sku/add
-app.post('/rpc/:module/:db_name/:action', authenticateToken, async (req, res) => {
-  const { module, db_name, action } = req.params;
+app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)'], authenticateToken, async (req, res) => {
+  const module = req.params.module || 'admin';
+  const db_name = getActualTableName(req.params.db_name);
+  const action = req.params.action;
   const params = req.body;
 
   try {
@@ -298,19 +339,7 @@ app.post('/rpc/:module/:db_name/:action', authenticateToken, async (req, res) =>
   }
 });
 
-// STS Upload Route
-app.post('/admin/sts', authenticateToken, async (req, res) => {
-    // Return mock STS token for now. In production, request from Aliyun
-    res.json({
-        msg: 'ok',
-        result: {
-            AccessKeyId: 'mock_ak',
-            AccessKeySecret: 'mock_sk',
-            SecurityToken: 'mock_token',
-            Expiration: new Date(Date.now() + 3600000).toISOString()
-        }
-    });
-});
+
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {
