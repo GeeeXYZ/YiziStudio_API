@@ -296,6 +296,72 @@ async function getOSSToken(openid = null, order_id = null) {
   };
 }
 
+// Helper to extract OSS object keys from string, object, or array
+function extractOSSKeys(record) {
+  let keys = [];
+  if (!record) return keys;
+
+  const bucketName = process.env.OSS_BUCKET;
+  const region = process.env.OSS_REGION;
+  if (!bucketName || !region) return keys;
+  
+  const ossDomain = `${bucketName}.${region}.aliyuncs.com/`;
+
+  function searchKeys(obj) {
+    if (typeof obj === 'string') {
+      if (obj.includes(ossDomain)) {
+        const parts = obj.split(ossDomain);
+        if (parts.length > 1) {
+          let key = parts[1].split('?')[0]; // remove query params if any
+          if (key) keys.push(key);
+        }
+      }
+    } else if (Array.isArray(obj)) {
+      obj.forEach(searchKeys);
+    } else if (typeof obj === 'object' && obj !== null) {
+      Object.values(obj).forEach(searchKeys);
+    }
+  }
+
+  // search top level fields
+  searchKeys(record);
+  
+  // search parsed JSONB data if needed
+  if (record.data) {
+    let parsedData = null;
+    if (typeof record.data === 'string') {
+      try { parsedData = JSON.parse(record.data); } catch (e) {}
+    } else if (typeof record.data === 'object') {
+      parsedData = record.data;
+    }
+    if (parsedData) searchKeys(parsedData);
+  }
+  
+  return [...new Set(keys)];
+}
+
+// Helper to delete OSS objects
+async function deleteOSSObjects(keys) {
+  if (!keys || keys.length === 0) return;
+  try {
+    const ossConfig = {
+      region: process.env.OSS_REGION,
+      accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+      accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+      bucket: process.env.OSS_BUCKET,
+      secure: true
+    };
+    if (!ossConfig.accessKeyId) return;
+    const client = new OSS(ossConfig);
+    
+    // deleteMulti max is 1000, usually we have a few
+    await client.deleteMulti(keys);
+    console.log(`[OSS GC] Deleted keys:`, keys);
+  } catch (error) {
+    console.error('[OSS GC Error]', error);
+  }
+}
+
 // STS Upload Route for general tmps upload
 app.post('/admin/sts', authenticateToken, async (req, res) => {
   try {
@@ -969,6 +1035,18 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const allowedCols = await getTableColumns(db_name);
         if (allowedCols.length === 0) return res.json({ msg: 'err', info: `Table ${db_name} does not exist in the database` });
 
+        // --- OSS GC (Update) ---
+        let oldKeys = [];
+        try {
+          const oldResult = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
+          if (oldResult.rows.length > 0) {
+            oldKeys = extractOSSKeys(oldResult.rows[0]);
+          }
+        } catch (err) {
+          console.error('[OSS GC] Failed to fetch old record for update', err);
+        }
+        // -----------------------
+
         const rawData = params.data || {};
         const finalData = {};
         let extraData = {};
@@ -1006,6 +1084,20 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
         const result = await pool.query(query, [...values, id]);
 
+        // --- OSS GC (Update Cleanup) ---
+        try {
+          if (result.rows.length > 0) {
+            const newKeys = extractOSSKeys(result.rows[0]);
+            const keysToDelete = oldKeys.filter(k => !newKeys.includes(k));
+            if (keysToDelete.length > 0) {
+              deleteOSSObjects(keysToDelete);
+            }
+          }
+        } catch (err) {
+          console.error('[OSS GC] Failed to GC after update', err);
+        }
+        // -------------------------------
+
         return res.json({ msg: 'ok', result: unpackRow(result.rows[0]) });
     }
 
@@ -1014,10 +1106,34 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const pk = await getPrimaryKeyColumn(db_name);
         const ids = params.ids || [];
 
+        // --- OSS GC (Delete) ---
+        let oldKeys = [];
+        try {
+          if (!Array.isArray(ids) || ids.length === 0) {
+            const singleId = params.id || params.uuid || params._id;
+            if (singleId) {
+              const oldResult = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [singleId]);
+              if (oldResult.rows.length > 0) {
+                oldKeys = extractOSSKeys(oldResult.rows[0]);
+              }
+            }
+          } else {
+            const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+            const oldResult = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" IN (${placeholders})`, ids);
+            oldResult.rows.forEach(r => {
+              oldKeys = oldKeys.concat(extractOSSKeys(r));
+            });
+          }
+        } catch (err) {
+          console.error('[OSS GC] Failed to fetch old records for delete', err);
+        }
+        // -----------------------
+
         if (!Array.isArray(ids) || ids.length === 0) {
           const singleId = params.id || params.uuid || params._id;
           if (singleId) {
             await pool.query(`DELETE FROM "${db_name}" WHERE "${pk}" = $1`, [singleId]);
+            if (oldKeys.length > 0) deleteOSSObjects(oldKeys);
             return res.json({ msg: 'ok' });
           }
           return res.json({ msg: 'err', info: 'No IDs provided for deletion' });
@@ -1026,6 +1142,8 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
         const query = `DELETE FROM "${db_name}" WHERE "${pk}" IN (${placeholders})`;
         await pool.query(query, ids);
+
+        if (oldKeys.length > 0) deleteOSSObjects(oldKeys);
 
         return res.json({ msg: 'ok' });
     }
