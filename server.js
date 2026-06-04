@@ -213,16 +213,18 @@ function getActualTableName(db_name) {
 
 // Helper to unpack JSONB data back to top-level for frontend backward compatibility
 function unpackRow(row) {
-  if (!row) return row;
-  let parsedData = {};
   if (row.data) {
     if (typeof row.data === 'string') {
-      try { parsedData = JSON.parse(row.data); } catch(e) {}
+      try {
+        const parsed = JSON.parse(row.data);
+        Object.assign(row, parsed);
+      } catch (e) {}
     } else if (typeof row.data === 'object') {
-      parsedData = row.data;
+      Object.assign(row, row.data);
     }
+    delete row.data;
   }
-  return { ...parsedData, ...row };
+  return row;
 }
 
 // Helper to format values for PG query (serialize objects/arrays to JSON string to prevent syntax error)
@@ -287,13 +289,8 @@ async function getOSSToken(openid = null, order_id = null) {
     throw new Error('获取阿里云 STS 凭证失败');
   }
 
-  // Fallback to primary credentials if roleArn is not configured
-  return {
-    region,
-    bucket,
-    accessKeyId,
-    accessKeySecret
-  };
+  // Security Hardening: Direct connection is disabled.
+  throw new Error('出于安全考虑，直连模式已被禁用。请在环境变量中配置 OSS_ROLE_ARN 以启用 STS 模式。');
 }
 
 // Helper to extract OSS object keys from string, object, or array
