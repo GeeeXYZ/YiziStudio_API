@@ -279,7 +279,7 @@ app.post('/admin/oss_delivery_imgs/upload/sts', authenticateToken, async (req, r
 
 // 2. RPC Main Channel
 // Action path example: /admin/orders/list, /admin/sku/add
-app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)'], authenticateToken, async (req, res) => {
+app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx/:db_name/:action(*)'], authenticateToken, async (req, res) => {
   const module = req.params.module || 'admin';
   const db_name = getActualTableName(req.params.db_name);
   const action = req.params.action;
@@ -288,6 +288,24 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)'], aut
   try {
     // 1) List Query Action (with proper pagination total count and simple search filters)
     if (action === 'list' || action === 'list/next_token_mode') {
+      // Support for batch querying comments or orders by ids
+      if (Array.isArray(params.ids) && params.ids.length > 0) {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const targetCol = db_name === 'yizi_comments' ? 'delivery_uuid' : pk;
+        const placeholders = params.ids.map((_, i) => `$${i + 1}`).join(', ');
+        const listQuery = `SELECT * FROM "${db_name}" WHERE "${targetCol}" IN (${placeholders})`;
+        const result = await pool.query(listQuery, params.ids);
+        return res.json({
+          msg: 'ok',
+          result: {
+            list: result.rows,
+            total: result.rows.length,
+            page: 1,
+            page_size: result.rows.length
+          }
+        });
+      }
+
       const page = params.page || params._page || 1;
       const pageSize = params.page_size || params._page_size || 10;
       
@@ -413,6 +431,283 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)'], aut
 });
 
 
+
+// ==========================================
+// CLIENT-SIDE /WX/... API CHANNELS
+// ==========================================
+
+// Helper to format order row to support legacy client count and format fields
+function formatOrderRow(row) {
+  let parsedData = {};
+  try {
+    parsedData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+  } catch (e) {}
+
+  let groupCount = 0;
+  let deliveryCount = 0;
+  let confirmGroupCount = 0;
+
+  if (Array.isArray(parsedData.sets)) {
+    groupCount = parsedData.sets.length;
+    parsedData.sets.forEach(s => {
+      if (Array.isArray(s.delivery_imgs) && s.delivery_imgs.length > 0) {
+        deliveryCount++;
+        if (s.delivery_imgs.some(d => d.confirmed_at)) {
+          confirmGroupCount++;
+        }
+      }
+    });
+  }
+
+  return {
+    ...row,
+    datetime: row.datetime ? new Date(row.datetime).getTime().toString() : null,
+    data: parsedData,
+    group_count: groupCount,
+    delivery_count: deliveryCount.toString(),
+    confirm_group_count: confirmGroupCount
+  };
+}
+
+// 1. User login (No token needed, phone & password, auto-register on first login)
+app.post('/wx/login', async (req, res) => {
+  const { phone, password } = req.body;
+  if (!phone || !password) {
+    return res.json({ msg: 'err', info: '手机号和密码不能为空' });
+  }
+
+  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+
+  try {
+    const userQuery = await pool.query('SELECT * FROM "yizi_users" WHERE "phone_number" = $1', [phone]);
+    if (userQuery.rows.length > 0) {
+      const user = userQuery.rows[0];
+      if (user.password === hashedPassword) {
+        const token = jwt.sign({ unionid: user.user_id, phone }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '30d' });
+        return res.json({ msg: 'ok', result: { token, unionid: user.user_id, phone } });
+      } else {
+        return res.json({ msg: 'err', info: '密码错误' });
+      }
+    } else {
+      // Auto-register new user
+      const newUserId = 'usr_' + crypto.randomBytes(8).toString('hex');
+      const defaultPoints = '1000'; // Default test points
+      await pool.query(
+        'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password") VALUES ($1, $2, $3, $4, $5)',
+        [newUserId, phone, phone, defaultPoints, hashedPassword]
+      );
+      const token = jwt.sign({ unionid: phone, phone }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '30d' });
+      return res.json({ msg: 'ok', result: { token, unionid: phone, phone } });
+    }
+  } catch (error) {
+    console.error('[User Login Error]', error);
+    res.json({ msg: 'err', info: '登录或自动注册失败' });
+  }
+});
+
+// 2. Get user points (GET /wx/user/points)
+app.get('/wx/user/points', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  try {
+    const result = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
+    if (result.rows.length > 0) {
+      const points = parseFloat(result.rows[0].points) || 0;
+      return res.json({ msg: 'ok', result: { points } });
+    }
+    res.json({ msg: 'err', info: '用户不存在' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 3. Get phone number
+app.post('/wx/get_phone_number', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  try {
+    const result = await pool.query('SELECT phone_number FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
+    if (result.rows.length > 0) {
+      return res.json({ msg: 'ok', result: { phone: result.rows[0].phone_number } });
+    }
+    res.json({ msg: 'ok', result: { phone: '' } });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 4. Update phone number
+app.post('/wx/user/phone_number/set', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  const { phone_number } = req.body;
+  if (!phone_number) return res.json({ msg: 'err', info: 'Phone number is required' });
+  try {
+    await pool.query('UPDATE "yizi_users" SET "phone_number" = $1 WHERE "user_id" = $2', [phone_number, unionid]);
+    res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 5. Create order and deduct points
+app.post('/wx/order/create', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  const { data, phone } = req.body;
+
+  if (!data || !data.planId || !data.model_uuid || !data.sets) {
+    return res.json({ msg: 'err', info: '订单参数不完整' });
+  }
+
+  try {
+    // 1) Calculate total cost from sets
+    let totalCost = 0;
+    if (Array.isArray(data.sets)) {
+      totalCost = data.sets.reduce((sum, s) => sum + (parseFloat(s.selectedPrice) || 0), 0);
+    }
+
+    // 2) Check user points
+    const userRes = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
+    if (userRes.rows.length === 0) {
+      return res.json({ msg: 'err', info: '用户不存在' });
+    }
+    const currentPoints = parseFloat(userRes.rows[0].points) || 0;
+    if (currentPoints < totalCost) {
+      return res.json({ msg: 'err', info: '扣子余额不足请充值后重试' });
+    }
+
+    // 3) Create order
+    const orderId = 'ord_' + crypto.randomBytes(8).toString('hex');
+    const datetime = new Date();
+    await pool.query(
+      `INSERT INTO "yizi_orders" (id, phone, datetime, data, delivery_count, completed, has_comments, wait_delivery, openid) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [orderId, phone || req.user.phone || '', datetime, JSON.stringify(data), '0', '0', '0', '1', unionid]
+    );
+
+    // 4) Deduct points
+    const nextPoints = currentPoints - totalCost;
+    await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "user_id" = $2 OR "phone_number" = $3', [nextPoints.toString(), unionid, unionid]);
+
+    res.json({ msg: 'ok', result: { id: orderId } });
+  } catch (error) {
+    console.error('[Order Create Error]', error);
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 6. List user orders (formatting datetime and data fields)
+app.post('/wx/order/list', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  try {
+    const result = await pool.query(
+      'SELECT * FROM "yizi_orders" WHERE openid = $1 OR phone = $2 ORDER BY datetime DESC',
+      [unionid, req.user.phone || '']
+    );
+    const list = result.rows.map(row => formatOrderRow(row));
+    res.json({ msg: 'ok', result: list });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 7. Get order detail
+app.post('/wx/order/get', authenticateToken, async (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.json({ msg: 'err', info: 'Order ID is required' });
+  try {
+    const result = await pool.query('SELECT * FROM "yizi_orders" WHERE id = $1', [id]);
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      return res.json({
+        msg: 'ok',
+        result: formatOrderRow(row)
+      });
+    }
+    res.json({ msg: 'err', info: 'Order not found' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 8. Submit feedback comment
+app.post('/wx/order/comment', authenticateToken, async (req, res) => {
+  const { id, index, delivery_index, comment } = req.body;
+  if (!id || index === undefined || delivery_index === undefined || !comment) {
+    return res.json({ msg: 'err', info: '参数错误' });
+  }
+  try {
+    // Write comment to separate yizi_comments table
+    // 1) Fetch order to get the delivery image UUID
+    const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [id]);
+    if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单未找到' });
+    
+    let orderData = {};
+    try {
+      orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+    } catch(e) {}
+    
+    const deliveryImg = orderData.sets?.[index]?.delivery_imgs?.[delivery_index];
+    const deliveryUuid = deliveryImg?.id || `img_${index}_${delivery_index}`;
+    
+    // 2) Write comment
+    const commentId = 'cmt_' + crypto.randomBytes(8).toString('hex');
+    await pool.query(
+      `INSERT INTO "yizi_comments" (id, delivery_uuid, type, comment, content) VALUES ($1, $2, $3, $4, $5)`,
+      [commentId, deliveryUuid, 'user', comment, comment]
+    );
+
+    // 3) Mark order as having comments
+    await pool.query('UPDATE "yizi_orders" SET has_comments = \'1\' WHERE id = $1', [id]);
+
+    res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 9. Confirm delivery image
+app.post('/wx/order/confirm', authenticateToken, async (req, res) => {
+  const { id, delivery_id } = req.body;
+  if (!id || !delivery_id) return res.json({ msg: 'err', info: '参数错误' });
+  try {
+    // 1) Read current order data
+    const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [id]);
+    if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存在' });
+    
+    let orderData = {};
+    try {
+      orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+    } catch(e) {}
+    
+    // 2) Update confirmed_at timestamp inside sets.delivery_imgs
+    let confirmedCount = 0;
+    let totalSets = orderData.sets?.length || 0;
+    
+    if (Array.isArray(orderData.sets)) {
+      orderData.sets.forEach(s => {
+        if (Array.isArray(s.delivery_imgs)) {
+          s.delivery_imgs.forEach(d => {
+            if (d.id === delivery_id) {
+              d.confirmed_at = new Date().toISOString();
+            }
+            if (d.confirmed_at) {
+              confirmedCount++;
+            }
+          });
+        }
+      });
+    }
+
+    // 3) Save updated data and check if completed
+    const completed = (confirmedCount >= totalSets) ? '1' : '0';
+    await pool.query(
+      'UPDATE "yizi_orders" SET data = $1, completed = $2 WHERE id = $3',
+      [JSON.stringify(orderData), completed, id]
+    );
+
+    res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {
