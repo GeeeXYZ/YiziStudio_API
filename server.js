@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import crypto from 'crypto';
 import Core from '@alicloud/pop-core';
+import OSS from 'ali-oss';
 
 dotenv.config();
 
@@ -191,6 +192,14 @@ function getActualTableName(db_name) {
   return mapping[db_name] || `yizi_${db_name}`;
 }
 
+// Helper to format values for PG query (serialize objects/arrays to JSON string to prevent syntax error)
+function prepareQueryValue(val) {
+  if (val !== null && typeof val === 'object' && !Buffer.isBuffer(val) && !(val instanceof Date)) {
+    return JSON.stringify(val);
+  }
+  return val;
+}
+
 // Helper to get Aliyun OSS STS Token or fallback to primary credentials
 async function getOSSToken(openid = null, order_id = null) {
   const accessKeyId = process.env.OSS_ACCESS_KEY_ID;
@@ -276,161 +285,6 @@ app.post('/admin/oss_delivery_imgs/upload/sts', authenticateToken, async (req, r
     res.json({ msg: 'err', info: error.message });
   }
 });
-
-// 2. RPC Main Channel
-// Action path example: /admin/orders/list, /admin/sku/add
-app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx/:db_name/:action(*)'], authenticateToken, async (req, res) => {
-  const module = req.params.module || 'admin';
-  const db_name = getActualTableName(req.params.db_name);
-  const action = req.params.action;
-  const params = req.body;
-
-  try {
-    // 1) List Query Action (with proper pagination total count and simple search filters)
-    if (action === 'list' || action === 'list/next_token_mode') {
-      // Support for batch querying comments or orders by ids
-      if (Array.isArray(params.ids) && params.ids.length > 0) {
-        const pk = await getPrimaryKeyColumn(db_name);
-        const targetCol = db_name === 'yizi_comments' ? 'delivery_uuid' : pk;
-        const placeholders = params.ids.map((_, i) => `$${i + 1}`).join(', ');
-        const listQuery = `SELECT * FROM "${db_name}" WHERE "${targetCol}" IN (${placeholders})`;
-        const result = await pool.query(listQuery, params.ids);
-        return res.json({
-          msg: 'ok',
-          result: {
-            list: result.rows,
-            total: result.rows.length,
-            page: 1,
-            page_size: result.rows.length
-          }
-        });
-      }
-
-      const page = params.page || params._page || 1;
-      const pageSize = params.page_size || params._page_size || 10;
-      
-      const conditions = params.conditions || params._conditions || {};
-      const whereClauses = [];
-      const values = [];
-      let placeholderIdx = 1;
-
-      Object.keys(conditions).forEach(key => {
-        const val = conditions[key];
-        if (val !== undefined && val !== null && val !== '' && val !== '__all__') {
-          if (typeof val === 'string') {
-            whereClauses.push(`"${key}" ILIKE $${placeholderIdx}`);
-            values.push(`%${val}%`);
-          } else {
-            whereClauses.push(`"${key}" = $${placeholderIdx}`);
-            values.push(val);
-          }
-          placeholderIdx++;
-        }
-      });
-
-      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-      
-      // Get total count
-      const countQuery = `SELECT COUNT(*) FROM "${db_name}" ${whereSql}`;
-      const countResult = await pool.query(countQuery, values);
-      const total = parseInt(countResult.rows[0].count, 10);
-
-      // Get page rows (order by primary key if exists to ensure consistent order)
-      const pk = await getPrimaryKeyColumn(db_name);
-      const limitIdx = placeholderIdx;
-      const offsetIdx = placeholderIdx + 1;
-      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${pk}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
-      const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
-      
-      return res.json({
-        msg: 'ok',
-        result: {
-          list: result.rows,
-          total: total,
-          page,
-          page_size: pageSize
-        }
-      });
-    }
-
-    // 2) Get Single Record Action
-    if (action === 'get') {
-        const pk = await getPrimaryKeyColumn(db_name);
-        const id = params[pk] || params.id || params.uuid || params._id;
-        const result = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
-        return res.json({
-            msg: 'ok',
-            result: result.rows[0] || null
-        });
-    }
-
-    // 3) Add Record Action
-    if (action === 'add') {
-        const fields = Object.keys(params.data || {});
-        const values = Object.values(params.data || {});
-        
-        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data provided' });
-        
-        const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
-        const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
-        const result = await pool.query(query, values);
-        
-        return res.json({ msg: 'ok', result: result.rows[0] });
-    }
-
-    // 4) Reset (Edit/Update) Record Action
-    if (action === 'reset') {
-        const pk = await getPrimaryKeyColumn(db_name);
-        const id = params[pk] || params.id || params.uuid || params._id;
-        const data = params.data || {};
-
-        const fields = Object.keys(data);
-        const values = Object.values(data);
-
-        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data to update' });
-
-        const setClauses = fields.map((f, i) => `"${f}" = $${i + 1}`).join(', ');
-        const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
-        const result = await pool.query(query, [...values, id]);
-
-        return res.json({ msg: 'ok', result: result.rows[0] });
-    }
-
-    // 5) Delete Record(s) Action
-    if (action === 'del') {
-        const pk = await getPrimaryKeyColumn(db_name);
-        const ids = params.ids || [];
-
-        if (!Array.isArray(ids) || ids.length === 0) {
-          const singleId = params.id || params.uuid || params._id;
-          if (singleId) {
-            await pool.query(`DELETE FROM "${db_name}" WHERE "${pk}" = $1`, [singleId]);
-            return res.json({ msg: 'ok' });
-          }
-          return res.json({ msg: 'err', info: 'No IDs provided for deletion' });
-        }
-
-        const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
-        const query = `DELETE FROM "${db_name}" WHERE "${pk}" IN (${placeholders})`;
-        await pool.query(query, ids);
-
-        return res.json({ msg: 'ok' });
-    }
-
-    // 6) Custom Trigger Handler
-    if (action === 'trigger') {
-        return res.json({ msg: 'ok', info: 'Workflow triggered (mocked)' });
-    }
-
-    // Default fallback
-    res.json({ msg: 'err', info: `Not implemented action: ${action}` });
-  } catch (error) {
-    console.error(`[RPC Error] ${module}/${db_name}/${action}`, error);
-    res.json({ msg: 'err', info: error.message });
-  }
-});
-
-
 
 // ==========================================
 // CLIENT-SIDE /WX/... API CHANNELS
@@ -627,6 +481,42 @@ app.post('/wx/order/get', authenticateToken, async (req, res) => {
   }
 });
 
+// 7.5 ComfyUI Dedicated API: Get order detail formatted for FetchOrderDataByOrderID node
+app.post('/comfyui/order/get', authenticateToken, async (req, res) => {
+  const { order_id, index } = req.body;
+  if (!order_id) return res.json({ msg: 'err', info: 'Order ID (order_id) is required' });
+  
+  try {
+    const result = await pool.query('SELECT * FROM "yizi_orders" WHERE id = $1', [order_id]);
+    if (result.rows.length === 0) {
+      return res.json({ msg: 'err', info: '订单不存在' });
+    }
+    
+    const row = result.rows[0];
+    let orderData = {};
+    try {
+      orderData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+    } catch(e) {}
+    
+    // Extract set based on requested index (default to 0)
+    const setIndex = parseInt(index) || 0;
+    const sets = orderData.sets || [];
+    const setInfo = sets[setIndex] || {};
+    
+    return res.json({
+      msg: 'ok',
+      result: {
+        images: setInfo.images || [],                                // ComfyUI expects array of URLs
+        pose: setInfo.pose_url || setInfo.pose || "",               // ComfyUI expects single string URL
+        prompt: setInfo.prompt || orderData.prompt || "",           // Fallback to global prompt if set doesn't have it
+        size: setInfo.size || orderData.size || 1024
+      }
+    });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
 // 8. Submit feedback comment
 app.post('/wx/order/comment', authenticateToken, async (req, res) => {
   const { id, index, delivery_index, comment } = req.body;
@@ -708,6 +598,338 @@ app.post('/wx/order/confirm', authenticateToken, async (req, res) => {
     res.json({ msg: 'err', info: error.message });
   }
 });
+
+// 2. RPC Main Channel
+// Action path example: /admin/orders/list, /admin/sku/add
+app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx/:db_name/:action(*)'], authenticateToken, async (req, res) => {
+  const module = req.params.module || 'admin';
+  const db_name = getActualTableName(req.params.db_name);
+  const action = req.params.action;
+  const params = req.body;
+
+  try {
+    // ----------------------------------------------------
+    // Custom Handlers for Special Table / Action overrides
+    // ----------------------------------------------------
+    
+    // A. Custom handlers for yizi_oss_delivery_imgs (list and del)
+    if (db_name === 'yizi_oss_delivery_imgs') {
+      const ossConfig = {
+        region: process.env.OSS_REGION,
+        accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+        accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+        bucket: process.env.OSS_BUCKET,
+        secure: true
+      };
+      const client = new OSS(ossConfig);
+
+      if (action === 'list') {
+        const { openid, order_id } = params;
+        if (!openid || !order_id) {
+          return res.json({ msg: 'err', info: 'Missing openid or order_id' });
+        }
+        const prefix = `delivery_imgs/${openid}/${order_id}/`;
+        const response = await client.listV2({
+          prefix: prefix,
+          'max-keys': 1000
+        });
+        const list = (response.objects || []).map(obj => {
+          return `https://${process.env.OSS_BUCKET}.${process.env.OSS_REGION}.aliyuncs.com/${obj.name}`;
+        });
+        return res.json({
+          msg: 'ok',
+          result: {
+            list: list,
+            total: list.length,
+            page: 1,
+            page_size: 1000
+          }
+        });
+      }
+
+      if (action === 'del') {
+        const paths = params.paths || [];
+        if (paths.length === 0) {
+          return res.json({ msg: 'ok' });
+        }
+        const names = paths.map(p => p.startsWith('/') ? p.slice(1) : p);
+        await client.deleteMulti(names);
+        return res.json({ msg: 'ok' });
+      }
+    }
+
+    // B. Custom handlers for yizi_vip_settings (add, reset, del)
+    if (db_name === 'yizi_vip_settings') {
+      if (action === 'add') {
+        const mobi = params.mobi;
+        const type = params.type || 'my_models';
+        const data = params.data || {};
+        const model_ids = data.model_ids || [];
+        
+        if (!mobi) {
+          return res.json({ msg: 'err', info: 'Missing mobi (phone number)' });
+        }
+
+        const query = `INSERT INTO "yizi_vip_settings" (mobi, type, model_ids, data) VALUES ($1, $2, $3, $4) RETURNING *`;
+        const result = await pool.query(query, [mobi, type, JSON.stringify(model_ids), JSON.stringify(data)]);
+        return res.json({ msg: 'ok', result: result.rows[0] });
+      }
+
+      if (action === 'reset') {
+        const mobi = params.mobi;
+        const data = params.data || {};
+        const model_ids = data.model_ids || [];
+        
+        if (!mobi) {
+          return res.json({ msg: 'err', info: 'Missing mobi (phone number)' });
+        }
+
+        const query = `UPDATE "yizi_vip_settings" SET model_ids = $1, data = $2 WHERE mobi = $3 RETURNING *`;
+        const result = await pool.query(query, [JSON.stringify(model_ids), JSON.stringify(data), mobi]);
+        return res.json({ msg: 'ok', result: result.rows[0] });
+      }
+
+      if (action === 'del') {
+        const mobi = params.mobi;
+        if (!mobi) {
+          return res.json({ msg: 'err', info: 'Missing mobi (phone number)' });
+        }
+        const query = `DELETE FROM "yizi_vip_settings" WHERE mobi = $1`;
+        await pool.query(query, [mobi]);
+        return res.json({ msg: 'ok' });
+      }
+    }
+
+    // C. Custom handler for yizi_model (assets/list)
+    if (db_name === 'yizi_model' && action === 'assets/list') {
+      const uuid = params.uuid;
+      const type = params.type; // poses, half_body_poses, specific_poses, gallery
+      
+      if (!uuid) {
+        return res.json({ msg: 'err', info: 'Missing model uuid' });
+      }
+      
+      const result = await pool.query('SELECT * FROM "yizi_model" WHERE "uuid" = $1', [uuid]);
+      if (result.rows.length === 0) {
+        return res.json({ msg: 'err', info: 'Model not found' });
+      }
+      
+      const model = result.rows[0];
+      let colName = 'poses';
+      if (type === 'poses') colName = 'poses';
+      else if (type === 'half_body_poses') colName = 'half_poses';
+      else if (type === 'specific_poses') colName = 'spacial_poses';
+      else if (type === 'gallery') colName = 'imgs';
+      
+      const rawVal = model[colName];
+      let list = [];
+      if (rawVal) {
+        if (typeof rawVal === 'string') {
+          const trimmed = rawVal.trim();
+          if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            try {
+              list = JSON.parse(trimmed);
+            } catch (e) {
+              list = trimmed.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+            }
+          } else {
+            list = trimmed.split(',').map(s => s.trim()).filter(Boolean);
+          }
+        } else if (Array.isArray(rawVal)) {
+          list = rawVal;
+        }
+      }
+      
+      return res.json({
+        msg: 'ok',
+        result: {
+          list: list,
+          total: list.length,
+          page: 1,
+          page_size: list.length
+        }
+      });
+    }
+
+    // D. Custom handler for yizi_users (points/ticket)
+    if (db_name === 'yizi_users' && action === 'points/ticket') {
+      const data = params.data || {};
+      const openid = data.openid;
+      const amount = parseFloat(data.amount) || 0;
+      
+      if (!openid) {
+        return res.json({ msg: 'err', info: 'Missing openid' });
+      }
+      
+      const userRes = await pool.query('SELECT * FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2 OR "_id" = $3', [openid, openid, openid]);
+      if (userRes.rows.length === 0) {
+        return res.json({ msg: 'err', info: 'User not found' });
+      }
+      
+      const user = userRes.rows[0];
+      const currentPoints = parseFloat(user.points) || 0;
+      const nextPoints = currentPoints + amount;
+      
+      await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "_id" = $2', [nextPoints.toString(), user._id]);
+      
+      return res.json({
+        msg: 'ok',
+        result: {
+          openid: openid,
+          points: nextPoints
+        }
+      });
+    }
+    // 1) List Query Action (with proper pagination total count and simple search filters)
+    if (action === 'list' || action === 'list/next_token_mode') {
+      // Support for batch querying comments or orders by ids
+      if (Array.isArray(params.ids) && params.ids.length > 0) {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const targetCol = db_name === 'yizi_comments' ? 'delivery_uuid' : pk;
+        const placeholders = params.ids.map((_, i) => `$${i + 1}`).join(', ');
+        const listQuery = `SELECT * FROM "${db_name}" WHERE "${targetCol}" IN (${placeholders})`;
+        const result = await pool.query(listQuery, params.ids);
+        return res.json({
+          msg: 'ok',
+          result: {
+            list: result.rows,
+            total: result.rows.length,
+            page: 1,
+            page_size: result.rows.length
+          }
+        });
+      }
+
+      const page = params.page || params._page || 1;
+      const pageSize = params.page_size || params._page_size || 10;
+      
+      const conditions = params.conditions || params._conditions || {};
+      const whereClauses = [];
+      const values = [];
+      let placeholderIdx = 1;
+
+      Object.keys(conditions).forEach(key => {
+        const val = conditions[key];
+        if (val !== undefined && val !== null && val !== '' && val !== '__all__') {
+          if (typeof val === 'string') {
+            whereClauses.push(`"${key}" ILIKE $${placeholderIdx}`);
+            values.push(`%${val}%`);
+          } else {
+            whereClauses.push(`"${key}" = $${placeholderIdx}`);
+            values.push(val);
+          }
+          placeholderIdx++;
+        }
+      });
+
+      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+      
+      // Get total count
+      const countQuery = `SELECT COUNT(*) FROM "${db_name}" ${whereSql}`;
+      const countResult = await pool.query(countQuery, values);
+      const total = parseInt(countResult.rows[0].count, 10);
+
+      // Get page rows (order by primary key if exists to ensure consistent order)
+      const pk = await getPrimaryKeyColumn(db_name);
+      const limitIdx = placeholderIdx;
+      const offsetIdx = placeholderIdx + 1;
+      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${pk}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
+      
+      return res.json({
+        msg: 'ok',
+        result: {
+          list: result.rows,
+          total: total,
+          page,
+          page_size: pageSize
+        }
+      });
+    }
+
+    // 2) Get Single Record Action
+    if (action === 'get') {
+        const pk = await getPrimaryKeyColumn(db_name);
+        let id = params[pk] || params.id || params.uuid || params._id;
+        if (db_name === 'yizi_front_sku_settings' && !id) {
+          id = '1';
+        }
+        const result = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
+        return res.json({
+            msg: 'ok',
+            result: result.rows[0] || null
+        });
+    }
+
+    // 3) Add Record Action
+    if (action === 'add') {
+        const fields = Object.keys(params.data || {});
+        const values = Object.values(params.data || {}).map(prepareQueryValue);
+        
+        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data provided' });
+        
+        const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
+        const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
+        const result = await pool.query(query, values);
+        
+        return res.json({ msg: 'ok', result: result.rows[0] });
+    }
+
+    // 4) Reset (Edit/Update) Record Action
+    if (action === 'reset') {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const id = params[pk] || params.id || params.uuid || params._id;
+        const data = params.data || {};
+
+        const fields = Object.keys(data);
+        const values = Object.values(data).map(prepareQueryValue);
+
+        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data to update' });
+
+        const setClauses = fields.map((f, i) => `"${f}" = $${i + 1}`).join(', ');
+        const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
+        const result = await pool.query(query, [...values, id]);
+
+        return res.json({ msg: 'ok', result: result.rows[0] });
+    }
+
+    // 5) Delete Record(s) Action
+    if (action === 'del') {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const ids = params.ids || [];
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+          const singleId = params.id || params.uuid || params._id;
+          if (singleId) {
+            await pool.query(`DELETE FROM "${db_name}" WHERE "${pk}" = $1`, [singleId]);
+            return res.json({ msg: 'ok' });
+          }
+          return res.json({ msg: 'err', info: 'No IDs provided for deletion' });
+        }
+
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+        const query = `DELETE FROM "${db_name}" WHERE "${pk}" IN (${placeholders})`;
+        await pool.query(query, ids);
+
+        return res.json({ msg: 'ok' });
+    }
+
+    // 6) Custom Trigger Handler
+    if (action === 'trigger') {
+        return res.json({ msg: 'ok', info: 'Workflow triggered (mocked)' });
+    }
+
+    // Default fallback
+    res.json({ msg: 'err', info: `Not implemented action: ${action}` });
+  } catch (error) {
+    console.error(`[RPC Error] ${module}/${db_name}/${action}`, error);
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+
+
+
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {
