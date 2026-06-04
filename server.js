@@ -211,6 +211,20 @@ function getActualTableName(db_name) {
   return mapping[db_name] || `yizi_${db_name}`;
 }
 
+// Helper to unpack JSONB data back to top-level for frontend backward compatibility
+function unpackRow(row) {
+  if (!row) return row;
+  let parsedData = {};
+  if (row.data) {
+    if (typeof row.data === 'string') {
+      try { parsedData = JSON.parse(row.data); } catch(e) {}
+    } else if (typeof row.data === 'object') {
+      parsedData = row.data;
+    }
+  }
+  return { ...parsedData, ...row };
+}
+
 // Helper to format values for PG query (serialize objects/arrays to JSON string to prevent syntax error)
 function prepareQueryValue(val) {
   if (val !== null && typeof val === 'object' && !Buffer.isBuffer(val) && !(val instanceof Date)) {
@@ -826,7 +840,7 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         return res.json({
           msg: 'ok',
           result: {
-            list: result.rows,
+            list: result.rows.map(unpackRow),
             total: result.rows.length,
             page: 1,
             page_size: result.rows.length
@@ -873,7 +887,7 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
       return res.json({
         msg: 'ok',
         result: {
-          list: result.rows,
+          list: result.rows.map(unpackRow),
           total: total,
           page,
           page_size: pageSize
@@ -891,7 +905,7 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const result = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
         return res.json({
             msg: 'ok',
-            result: result.rows[0] || null
+            result: unpackRow(result.rows[0]) || null
         });
     }
 
@@ -944,7 +958,7 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
         const result = await pool.query(query, values);
         
-        return res.json({ msg: 'ok', result: result.rows[0] });
+        return res.json({ msg: 'ok', result: unpackRow(result.rows[0]) });
     }
 
     // 4) Reset (Edit/Update) Record Action
@@ -992,7 +1006,7 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
         const result = await pool.query(query, [...values, id]);
 
-        return res.json({ msg: 'ok', result: result.rows[0] });
+        return res.json({ msg: 'ok', result: unpackRow(result.rows[0]) });
     }
 
     // 5) Delete Record(s) Action
