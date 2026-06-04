@@ -901,6 +901,15 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         if (allowedCols.length === 0) return res.json({ msg: 'err', info: `Table ${db_name} does not exist in the database` });
 
         const rawData = params.data || {};
+        
+        // Auto-generate primary key if missing
+        const pk = await getPrimaryKeyColumn(db_name);
+        if (!rawData[pk] && allowedCols.includes(pk)) {
+          // Generate a short ID prefixed with the table name (e.g., sku_a1b2c3d4)
+          const prefix = db_name.replace('yizi_', '').substring(0, 3);
+          rawData[pk] = prefix + '_' + crypto.randomBytes(8).toString('hex');
+        }
+
         const finalData = {};
         let extraData = {};
 
