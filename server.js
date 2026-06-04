@@ -167,6 +167,25 @@ async function getPrimaryKeyColumn(tableName) {
   }
 }
 
+// Cache for table columns to avoid repetitive schema queries
+const tableColumnsCache = {};
+
+// Helper to get all valid column names of a table dynamically
+async function getTableColumns(tableName) {
+  if (tableColumnsCache[tableName]) return tableColumnsCache[tableName];
+  try {
+    const res = await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+      [tableName]
+    );
+    const cols = res.rows.map(r => r.column_name);
+    tableColumnsCache[tableName] = cols;
+    return cols;
+  } catch (e) {
+    return [];
+  }
+}
+
 // Helper to map route db_name to actual database table name
 function getActualTableName(db_name) {
   if (!db_name) return db_name;
@@ -324,10 +343,15 @@ function formatOrderRow(row) {
 }
 
 // 1. User login (No token needed, phone & password, auto-register on first login)
-app.post('/wx/login', async (req, res) => {
+app.post('/client/login', async (req, res) => {
   const { phone, password } = req.body;
-  if (!phone || !password) {
-    return res.json({ msg: 'err', info: '手机号和密码不能为空' });
+  if (typeof phone !== 'string' || typeof password !== 'string' || !phone || !password) {
+    return res.json({ msg: 'err', info: '手机号和密码格式错误' });
+  }
+
+  // Prevent absurdly long inputs
+  if (phone.length > 20 || password.length > 100) {
+    return res.json({ msg: 'err', info: '输入过长' });
   }
 
   const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
@@ -359,8 +383,8 @@ app.post('/wx/login', async (req, res) => {
   }
 });
 
-// 2. Get user points (GET /wx/user/points)
-app.get('/wx/user/points', authenticateToken, async (req, res) => {
+// 2. Get user points (GET /client/user/points)
+app.get('/client/user/points', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   try {
     const result = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
@@ -375,7 +399,7 @@ app.get('/wx/user/points', authenticateToken, async (req, res) => {
 });
 
 // 3. Get phone number
-app.post('/wx/get_phone_number', authenticateToken, async (req, res) => {
+app.post('/client/get_phone_number', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   try {
     const result = await pool.query('SELECT phone_number FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
@@ -389,7 +413,7 @@ app.post('/wx/get_phone_number', authenticateToken, async (req, res) => {
 });
 
 // 4. Update phone number
-app.post('/wx/user/phone_number/set', authenticateToken, async (req, res) => {
+app.post('/client/user/phone_number/set', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   const { phone_number } = req.body;
   if (!phone_number) return res.json({ msg: 'err', info: 'Phone number is required' });
@@ -402,20 +426,30 @@ app.post('/wx/user/phone_number/set', authenticateToken, async (req, res) => {
 });
 
 // 5. Create order and deduct points
-app.post('/wx/order/create', authenticateToken, async (req, res) => {
+app.post('/client/order/create', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   const { data, phone } = req.body;
 
-  if (!data || !data.planId || !data.model_uuid || !data.sets) {
-    return res.json({ msg: 'err', info: '订单参数不完整' });
+  if (!data || typeof data !== 'object' || !data.planId || !data.model_uuid || !data.sets) {
+    return res.json({ msg: 'err', info: '订单参数不完整或格式错误' });
   }
 
   try {
-    // 1) Calculate total cost from sets
+    // 1) Calculate total cost from sets with strict type and logic validation
     let totalCost = 0;
     if (Array.isArray(data.sets)) {
-      totalCost = data.sets.reduce((sum, s) => sum + (parseFloat(s.selectedPrice) || 0), 0);
+      for (const s of data.sets) {
+        const price = parseFloat(s.selectedPrice);
+        if (isNaN(price) || price < 0) {
+          return res.json({ msg: 'err', info: '非法订单：包含异常金额' });
+        }
+        totalCost += price;
+      }
     }
+
+    // WARNING: In a final commercial state, the price should be calculated independently
+    // by the backend querying the yizi_sku table based on planId and parameters,
+    // rather than trusting the frontend's selectedPrice.
 
     // 2) Check user points
     const userRes = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
@@ -448,7 +482,7 @@ app.post('/wx/order/create', authenticateToken, async (req, res) => {
 });
 
 // 6. List user orders (formatting datetime and data fields)
-app.post('/wx/order/list', authenticateToken, async (req, res) => {
+app.post('/client/order/list', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   try {
     const result = await pool.query(
@@ -463,7 +497,7 @@ app.post('/wx/order/list', authenticateToken, async (req, res) => {
 });
 
 // 7. Get order detail
-app.post('/wx/order/get', authenticateToken, async (req, res) => {
+app.post('/client/order/get', authenticateToken, async (req, res) => {
   const { id } = req.body;
   if (!id) return res.json({ msg: 'err', info: 'Order ID is required' });
   try {
@@ -518,7 +552,7 @@ app.post('/comfyui/order/get', authenticateToken, async (req, res) => {
 });
 
 // 8. Submit feedback comment
-app.post('/wx/order/comment', authenticateToken, async (req, res) => {
+app.post('/client/order/comment', authenticateToken, async (req, res) => {
   const { id, index, delivery_index, comment } = req.body;
   if (!id || index === undefined || delivery_index === undefined || !comment) {
     return res.json({ msg: 'err', info: '参数错误' });
@@ -554,7 +588,7 @@ app.post('/wx/order/comment', authenticateToken, async (req, res) => {
 });
 
 // 9. Confirm delivery image
-app.post('/wx/order/confirm', authenticateToken, async (req, res) => {
+app.post('/client/order/confirm', authenticateToken, async (req, res) => {
   const { id, delivery_id } = req.body;
   if (!id || !delivery_id) return res.json({ msg: 'err', info: '参数错误' });
   try {
@@ -601,7 +635,7 @@ app.post('/wx/order/confirm', authenticateToken, async (req, res) => {
 
 // 2. RPC Main Channel
 // Action path example: /admin/orders/list, /admin/sku/add
-app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx/:db_name/:action(*)'], authenticateToken, async (req, res) => {
+app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, async (req, res) => {
   const module = req.params.module || 'admin';
   const db_name = getActualTableName(req.params.db_name);
   const action = req.params.action;
@@ -863,10 +897,39 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx
 
     // 3) Add Record Action
     if (action === 'add') {
-        const fields = Object.keys(params.data || {});
-        const values = Object.values(params.data || {}).map(prepareQueryValue);
+        const allowedCols = await getTableColumns(db_name);
+        if (allowedCols.length === 0) return res.json({ msg: 'err', info: `Table ${db_name} does not exist in the database` });
+
+        const rawData = params.data || {};
+        const finalData = {};
+        let extraData = {};
+
+        // Intelligent distribution
+        for (const [key, val] of Object.entries(rawData)) {
+          if (allowedCols.includes(key)) {
+            finalData[key] = val;
+          } else {
+            extraData[key] = val;
+          }
+        }
+
+        // Pack unknown fields into 'data' column if it exists
+        if (allowedCols.includes('data') && Object.keys(extraData).length > 0) {
+          let existingData = finalData['data'];
+          if (typeof existingData === 'string') {
+            try { existingData = JSON.parse(existingData); } catch(e) { existingData = {}; }
+          } else if (typeof existingData !== 'object' || existingData === null) {
+            existingData = {};
+          }
+          finalData['data'] = JSON.stringify({ ...existingData, ...extraData });
+        } else if (Object.keys(extraData).length > 0) {
+          console.warn(`[Bulletproof API] Dropped unknown fields for table ${db_name}: ${Object.keys(extraData).join(', ')}`);
+        }
+
+        const fields = Object.keys(finalData);
+        const values = Object.values(finalData).map(prepareQueryValue);
         
-        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data provided' });
+        if (fields.length === 0) return res.json({ msg: 'err', info: 'No valid data provided for insertion' });
         
         const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
         const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
@@ -879,12 +942,42 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/wx
     if (action === 'reset') {
         const pk = await getPrimaryKeyColumn(db_name);
         const id = params[pk] || params.id || params.uuid || params._id;
-        const data = params.data || {};
+        
+        const allowedCols = await getTableColumns(db_name);
+        if (allowedCols.length === 0) return res.json({ msg: 'err', info: `Table ${db_name} does not exist in the database` });
 
-        const fields = Object.keys(data);
-        const values = Object.values(data).map(prepareQueryValue);
+        const rawData = params.data || {};
+        const finalData = {};
+        let extraData = {};
 
-        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data to update' });
+        // Intelligent distribution
+        for (const [key, val] of Object.entries(rawData)) {
+          if (allowedCols.includes(key)) {
+            finalData[key] = val;
+          } else {
+            extraData[key] = val;
+          }
+        }
+
+        // Pack unknown fields into 'data' column if it exists
+        // Note: For 'reset' (update), we might need to merge with existing DB data JSON, but for simplicity
+        // in this CMS, the frontend usually sends the entire JSON payload anyway. We will merge at the payload level.
+        if (allowedCols.includes('data') && Object.keys(extraData).length > 0) {
+          let existingData = finalData['data'];
+          if (typeof existingData === 'string') {
+            try { existingData = JSON.parse(existingData); } catch(e) { existingData = {}; }
+          } else if (typeof existingData !== 'object' || existingData === null) {
+            existingData = {};
+          }
+          finalData['data'] = JSON.stringify({ ...existingData, ...extraData });
+        } else if (Object.keys(extraData).length > 0) {
+          console.warn(`[Bulletproof API] Dropped unknown update fields for table ${db_name}: ${Object.keys(extraData).join(', ')}`);
+        }
+
+        const fields = Object.keys(finalData);
+        const values = Object.values(finalData).map(prepareQueryValue);
+
+        if (fields.length === 0) return res.json({ msg: 'err', info: 'No valid data to update' });
 
         const setClauses = fields.map((f, i) => `"${f}" = $${i + 1}`).join(', ');
         const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
