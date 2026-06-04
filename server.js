@@ -150,6 +150,21 @@ app.post('/admin_toggle_super', authenticateToken, async (req, res) => {
   }
 });
 
+// Helper to get primary key column of a table in PostgreSQL
+async function getPrimaryKeyColumn(tableName) {
+  try {
+    const res = await pool.query(`
+      SELECT a.attname
+      FROM pg_index i
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = $1::regclass AND i.indisprimary
+    `, [tableName]);
+    return res.rows[0] ? res.rows[0].attname : 'id';
+  } catch (e) {
+    return 'id'; // default fallback
+  }
+}
+
 // 2. RPC Main Channel
 // Action path example: /admin/orders/list, /admin/sku/add
 app.post('/rpc/:module/:db_name/:action', authenticateToken, async (req, res) => {
@@ -157,50 +172,126 @@ app.post('/rpc/:module/:db_name/:action', authenticateToken, async (req, res) =>
   const params = req.body;
 
   try {
-    if (action === 'list') {
-      // Mock list implementation
-      const page = params.page || 1;
-      const pageSize = params.page_size || 10;
-      // TODO: Real database query
-      const result = await pool.query(`SELECT * FROM "${db_name}" LIMIT $1 OFFSET $2`, [pageSize, (page - 1) * pageSize]);
+    // 1) List Query Action (with proper pagination total count and simple search filters)
+    if (action === 'list' || action === 'list/next_token_mode') {
+      const page = params.page || params._page || 1;
+      const pageSize = params.page_size || params._page_size || 10;
+      
+      const conditions = params.conditions || params._conditions || {};
+      const whereClauses = [];
+      const values = [];
+      let placeholderIdx = 1;
+
+      Object.keys(conditions).forEach(key => {
+        const val = conditions[key];
+        if (val !== undefined && val !== null && val !== '' && val !== '__all__') {
+          if (typeof val === 'string') {
+            whereClauses.push(`"${key}" ILIKE $${placeholderIdx}`);
+            values.push(`%${val}%`);
+          } else {
+            whereClauses.push(`"${key}" = $${placeholderIdx}`);
+            values.push(val);
+          }
+          placeholderIdx++;
+        }
+      });
+
+      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+      
+      // Get total count
+      const countQuery = `SELECT COUNT(*) FROM "${db_name}" ${whereSql}`;
+      const countResult = await pool.query(countQuery, values);
+      const total = parseInt(countResult.rows[0].count, 10);
+
+      // Get page rows (order by primary key if exists to ensure consistent order)
+      const pk = await getPrimaryKeyColumn(db_name);
+      const limitIdx = placeholderIdx;
+      const offsetIdx = placeholderIdx + 1;
+      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${pk}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
       
       return res.json({
         msg: 'ok',
         result: {
           list: result.rows,
-          total: result.rowCount,
+          total: total,
           page,
           page_size: pageSize
         }
       });
     }
 
+    // 2) Get Single Record Action
     if (action === 'get') {
-        const id = params.id;
-        const result = await pool.query(`SELECT * FROM "${db_name}" WHERE id = $1`, [id]);
+        const pk = await getPrimaryKeyColumn(db_name);
+        const id = params[pk] || params.id || params.uuid || params._id;
+        const result = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
         return res.json({
             msg: 'ok',
             result: result.rows[0] || null
         });
     }
 
+    // 3) Add Record Action
     if (action === 'add') {
-        // Mock add implementation
         const fields = Object.keys(params.data || {});
         const values = Object.values(params.data || {});
         
         if (fields.length === 0) return res.json({ msg: 'err', info: 'No data provided' });
         
         const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
-        
         const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
         const result = await pool.query(query, values);
         
         return res.json({ msg: 'ok', result: result.rows[0] });
     }
 
+    // 4) Reset (Edit/Update) Record Action
+    if (action === 'reset') {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const id = params[pk] || params.id || params.uuid || params._id;
+        const data = params.data || {};
+
+        const fields = Object.keys(data);
+        const values = Object.values(data);
+
+        if (fields.length === 0) return res.json({ msg: 'err', info: 'No data to update' });
+
+        const setClauses = fields.map((f, i) => `"${f}" = $${i + 1}`).join(', ');
+        const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
+        const result = await pool.query(query, [...values, id]);
+
+        return res.json({ msg: 'ok', result: result.rows[0] });
+    }
+
+    // 5) Delete Record(s) Action
+    if (action === 'del') {
+        const pk = await getPrimaryKeyColumn(db_name);
+        const ids = params.ids || [];
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+          const singleId = params.id || params.uuid || params._id;
+          if (singleId) {
+            await pool.query(`DELETE FROM "${db_name}" WHERE "${pk}" = $1`, [singleId]);
+            return res.json({ msg: 'ok' });
+          }
+          return res.json({ msg: 'err', info: 'No IDs provided for deletion' });
+        }
+
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+        const query = `DELETE FROM "${db_name}" WHERE "${pk}" IN (${placeholders})`;
+        await pool.query(query, ids);
+
+        return res.json({ msg: 'ok' });
+    }
+
+    // 6) Custom Trigger Handler
+    if (action === 'trigger') {
+        return res.json({ msg: 'ok', info: 'Workflow triggered (mocked)' });
+    }
+
     // Default fallback
-    res.json({ msg: 'err', info: 'Not implemented action' });
+    res.json({ msg: 'err', info: `Not implemented action: ${action}` });
   } catch (error) {
     console.error(`[RPC Error] ${module}/${db_name}/${action}`, error);
     res.json({ msg: 'err', info: error.message });
