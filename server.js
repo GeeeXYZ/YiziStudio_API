@@ -10,6 +10,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check / status route
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'Yizi Studio API Middleware',
+    time: new Date().toISOString()
+  });
+});
+
 // Database connection
 const { Pool } = pg;
 const pool = new Pool({
