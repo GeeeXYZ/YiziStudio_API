@@ -213,6 +213,7 @@ function getActualTableName(db_name) {
 
 // Helper to unpack JSONB data back to top-level for frontend backward compatibility
 function unpackRow(row) {
+  if (!row) return row;
   if (row.data) {
     if (typeof row.data === 'string') {
       try {
