@@ -1219,11 +1219,14 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
       const countResult = await pool.query(countQuery, values);
       const total = parseInt(countResult.rows[0].count, 10);
 
-      // Get page rows (order by primary key if exists to ensure consistent order)
+      // Get page rows
       const pk = await getPrimaryKeyColumn(db_name);
+      // Allow caller to specify sort column; fallback to pk
+      const orderByCol = params.sort_by || pk;
+      
       const limitIdx = placeholderIdx;
       const offsetIdx = placeholderIdx + 1;
-      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${pk}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${orderByCol}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
       const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
       
       let listData = result.rows.map(unpackRow);
@@ -1232,10 +1235,12 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
       if (db_name === 'yizi_orders' && listData.length > 0) {
         const openids = [...new Set(listData.map(r => r.openid).filter(Boolean))];
         if (openids.length > 0) {
-          const placeholders = openids.map((_, i) => `$${i + 1}`).join(', ');
-          // We check user_id, _id, and phone_number to support different OpenID strategies
+           const n = openids.length;
+          const ph1 = openids.map((_, i) => `$${i + 1}`).join(', ');
+          const ph2 = openids.map((_, i) => `$${n + i + 1}`).join(', ');
+          const ph3 = openids.map((_, i) => `$${2 * n + i + 1}`).join(', ');
           const usersRes = await pool.query(
-            `SELECT "user_id", "_id", "phone_number", "remark" FROM "yizi_users" WHERE "user_id" IN (${placeholders}) OR "_id" IN (${placeholders}) OR "phone_number" IN (${placeholders})`, 
+            `SELECT "user_id", "_id", "phone_number", "remark" FROM "yizi_users" WHERE "user_id" IN (${ph1}) OR "_id" IN (${ph2}) OR "phone_number" IN (${ph3})`, 
             [...openids, ...openids, ...openids]
           );
           const userMap = {};
