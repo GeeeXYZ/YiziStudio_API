@@ -6,6 +6,10 @@ import pg from 'pg';
 import crypto from 'crypto';
 import Core from '@alicloud/pop-core';
 import OSS from 'ali-oss';
+import { EventEmitter } from 'events';
+
+export const orderEventEmitter = new EventEmitter();
+orderEventEmitter.setMaxListeners(100);
 
 dotenv.config();
 
@@ -31,7 +35,8 @@ const pool = new Pool({
 // Middleware for auth
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  // Support Bearer token OR token in query string (useful for SSE EventSource)
+  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
   
   if (!token) return res.status(401).json({ msg: 'err', info: 'No token provided' });
 
@@ -616,6 +621,39 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
   }
 });
 
+// SSE Notifications Endpoint
+app.get('/client/order/events', authenticateToken, (req, res) => {
+  const unionid = req.user.unionid;
+  
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no' // Prevent Nginx buffering
+  });
+
+  // Send an initial connected event
+  res.write(`data: ${JSON.stringify({ event: 'CONNECTED', unionid })}\n\n`);
+
+  // Heartbeat to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(`data: ${JSON.stringify({ event: 'PING', time: Date.now() })}\n\n`);
+  }, 15000);
+
+  // Setup listener
+  const listener = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const eventName = `orderUpdate:${unionid}`;
+  orderEventEmitter.on(eventName, listener);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    orderEventEmitter.off(eventName, listener);
+  });
+});
+
 // 6. List user orders (formatting datetime and data fields)
 app.post('/client/order/list', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
@@ -716,6 +754,8 @@ app.post('/client/order/comment', authenticateToken, async (req, res) => {
     // 3) Mark order as having comments
     await pool.query('UPDATE "yizi_orders" SET has_comments = \'1\' WHERE id = $1', [id]);
 
+    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'COMMENT_ADDED' });
+
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -761,6 +801,8 @@ app.post('/client/order/confirm', authenticateToken, async (req, res) => {
       'UPDATE "yizi_orders" SET data = $1, completed = $2 WHERE id = $3',
       [JSON.stringify(orderData), completed, id]
     );
+
+    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'ORDER_CONFIRMED' });
 
     res.json({ msg: 'ok' });
   } catch (error) {
@@ -1176,6 +1218,13 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const setClauses = fields.map((f, i) => `"${f}" = $${i + 1}`).join(', ');
         const query = `UPDATE "${db_name}" SET ${setClauses} WHERE "${pk}" = $${fields.length + 1} RETURNING *`;
         const result = await pool.query(query, [...values, id]);
+
+        if (db_name === 'yizi_orders' && result.rows.length > 0) {
+            const rowOpenid = result.rows[0].openid;
+            if (rowOpenid) {
+                orderEventEmitter.emit(`orderUpdate:${rowOpenid}`, { orderId: id, event: 'ADMIN_UPDATE' });
+            }
+        }
 
         // --- OSS GC (Update Cleanup) ---
         try {
