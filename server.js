@@ -373,6 +373,24 @@ function extractOSSKeys(record) {
 async function deleteOSSObjects(keys) {
   if (!keys || keys.length === 0) return;
   try {
+    // --- GC Protection (Gallery) ---
+    const safeKeys = [];
+    const protectedKeys = [];
+    for (const key of keys) {
+      const res = await pool.query('SELECT id FROM "yizi_gallery" WHERE oss_url LIKE $1 LIMIT 1', ['%' + key]);
+      if (res.rows.length > 0) {
+        protectedKeys.push(key);
+      } else {
+        safeKeys.push(key);
+      }
+    }
+    
+    if (protectedKeys.length > 0) {
+      console.log(`[OSS GC] Protected keys (in gallery):`, protectedKeys);
+    }
+    
+    if (safeKeys.length === 0) return;
+
     const ossConfig = {
       region: process.env.OSS_REGION,
       accessKeyId: process.env.OSS_ACCESS_KEY_ID,
@@ -384,8 +402,8 @@ async function deleteOSSObjects(keys) {
     const client = new OSS(ossConfig);
     
     // deleteMulti max is 1000, usually we have a few
-    await client.deleteMulti(keys);
-    console.log(`[OSS GC] Deleted keys:`, keys);
+    await client.deleteMulti(safeKeys);
+    console.log(`[OSS GC] Deleted safe keys:`, safeKeys);
   } catch (error) {
     console.error('[OSS GC Error]', error);
   }
@@ -575,21 +593,34 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
   }
 
   try {
-    // 1) Calculate total cost from sets with strict type and logic validation
+    // 1) Fetch true template pricing from database
+    const skuRes = await pool.query('SELECT data FROM "yizi_sku" WHERE uuid = $1', [data.planId]);
+    if (skuRes.rows.length === 0) {
+      return res.json({ msg: 'err', info: '商品模板不存在' });
+    }
+    
+    let skuData = {};
+    try {
+      skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+    } catch (e) {}
+
+    const realServerPrice = parseFloat(skuData.price) || 0;
+
+    if (isNaN(realServerPrice) || realServerPrice < 0) {
+      return res.json({ msg: 'err', info: '商品模板价格异常' });
+    }
+
+    // 2) Calculate total cost and override frontend inputs
     let totalCost = 0;
     if (Array.isArray(data.sets)) {
       for (const s of data.sets) {
-        const price = parseFloat(s.selectedPrice);
-        if (isNaN(price) || price < 0) {
-          return res.json({ msg: 'err', info: '非法订单：包含异常金额' });
-        }
-        totalCost += price;
+        s.selectedPrice = realServerPrice; // Override with server truth
+        totalCost += realServerPrice;
       }
     }
-
-    // WARNING: In a final commercial state, the price should be calculated independently
-    // by the backend querying the yizi_sku table based on planId and parameters,
-    // rather than trusting the frontend's selectedPrice.
+    
+    // Explicitly cache the consumed points on the order for accurate future refunds
+    data.total_cost = totalCost;
 
     // 2) Check user points
     const userRes = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
@@ -777,34 +808,95 @@ app.post('/client/order/confirm', authenticateToken, async (req, res) => {
     } catch(e) {}
     
     // 2) Update confirmed_at timestamp inside sets.delivery_imgs
+    let totalDeliveryImages = 0;
     let confirmedCount = 0;
-    let totalSets = orderData.sets?.length || 0;
+    
+    let confirmedImagesToInsert = [];
     
     if (Array.isArray(orderData.sets)) {
       orderData.sets.forEach(s => {
         if (Array.isArray(s.delivery_imgs)) {
           s.delivery_imgs.forEach(d => {
             if (d.id === delivery_id) {
-              d.confirmed_at = new Date().toISOString();
+              if (!d.confirmed_at) {
+                d.confirmed_at = new Date().toISOString();
+                if (d.img) confirmedImagesToInsert.push(d.img);
+              }
             }
-            if (d.confirmed_at) {
-              confirmedCount++;
+            // Only count slots that have actual images
+            if (d.img) {
+              totalDeliveryImages++;
+              if (d.confirmed_at) {
+                confirmedCount++;
+              }
             }
           });
         }
       });
     }
 
+    // Insert into gallery
+    if (confirmedImagesToInsert.length > 0) {
+      const orderOpenidRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [id]);
+      const openid = orderOpenidRes.rows[0]?.openid || req.user.openid;
+      
+      for (const imgUrl of confirmedImagesToInsert) {
+        const galleryId = 'gal_' + crypto.randomBytes(8).toString('hex');
+        await pool.query(
+            `INSERT INTO "yizi_gallery" (id, openid, oss_url, order_id) VALUES ($1, $2, $3, $4)`,
+            [galleryId, openid, imgUrl, id]
+        );
+      }
+    }
+
     // 3) Save updated data and check if completed
-    const completed = (confirmedCount >= totalSets) ? '1' : '0';
+    // completed = ALL delivery images with content have been confirmed by the user
+    const completed = (totalDeliveryImages > 0 && confirmedCount >= totalDeliveryImages) ? '1' : '0';
     await pool.query(
       'UPDATE "yizi_orders" SET data = $1, completed = $2 WHERE id = $3',
       [JSON.stringify(orderData), completed, id]
     );
 
-    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'ORDER_CONFIRMED' });
+    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { 
+        orderId: id, 
+        event: 'ORDER_CONFIRMED',
+        completed: completed === '1'
+    });
 
     res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+app.post('/client/gallery/list', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT g.id, g.oss_url as url, g.order_id, g.created_at, o.data as order_data 
+      FROM "yizi_gallery" g 
+      LEFT JOIN "yizi_orders" o ON g.order_id = o.id 
+      WHERE g.openid = $1 
+      ORDER BY g.created_at DESC
+    `, [req.user.openid || req.user.unionid]);
+    
+    const list = result.rows.map(row => {
+        let orderData = {};
+        if (typeof row.order_data === 'string') {
+            try { orderData = JSON.parse(row.order_data); } catch(e){}
+        } else {
+            orderData = row.order_data || {};
+        }
+        return {
+            id: row.id,
+            url: row.url,
+            orderId: row.order_id,
+            date: row.created_at,
+            model: orderData.model_uuid || 'Unknown',
+            template: orderData.planTitle || 'Unknown',
+            sourceImages: orderData.sets?.[0]?.images?.filter(i=>i) || []
+        };
+    });
+    res.json({ msg: 'ok', result: list });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
@@ -849,6 +941,55 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
     // Custom Handlers for Special Table / Action overrides
     // ----------------------------------------------------
     
+    if (db_name === 'yizi_orders' && action === 'refund') {
+      const order_id = params.id;
+      if (!order_id) return res.json({ msg: 'err', info: '缺少订单ID' });
+      
+      const orderRes = await pool.query('SELECT * FROM "yizi_orders" WHERE "id" = $1', [order_id]);
+      if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存在' });
+      
+      const order = orderRes.rows[0];
+      const orderData = typeof order.data === 'string' ? JSON.parse(order.data) : (order.data || {});
+      
+      if (orderData.refunded === '1') {
+        return res.json({ msg: 'err', info: '该订单已退回，无法重复退回' });
+      }
+
+      // Use the cached total_cost if available, else fallback for legacy orders
+      let totalCost = parseFloat(orderData.total_cost);
+      if (isNaN(totalCost)) {
+        totalCost = 0;
+        if (Array.isArray(orderData.sets)) {
+          orderData.sets.forEach(s => {
+            totalCost += parseFloat(s.selectedPrice) || 0;
+          });
+        }
+      }
+
+      // Refund user points securely on backend
+      const openid = order.openid;
+      if (openid) {
+        const userRes = await pool.query('SELECT "_id", "points" FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1 OR "_id" = $1', [openid]);
+        if (userRes.rows.length > 0) {
+          const user = userRes.rows[0];
+          const currentPoints = parseFloat(user.points) || 0;
+          const newPoints = currentPoints + totalCost;
+          await pool.query('UPDATE "yizi_users" SET "points" = $1 WHERE "_id" = $2', [newPoints.toString(), user._id]);
+        }
+      }
+
+      // Mark order as refunded and hide from pending workflows
+      orderData.refunded = '1';
+      await pool.query('UPDATE "yizi_orders" SET "data" = $1, "completed" = $2, "wait_delivery" = $3 WHERE "id" = $4', [JSON.stringify(orderData), '0', '0', order_id]);
+
+      orderEventEmitter.emit(`orderUpdate:${openid}`, { 
+          orderId: order_id, 
+          event: 'ORDER_REFUNDED'
+      });
+
+      return res.json({ msg: 'ok', info: `已退回，并返还 ${totalCost} coz 积分` });
+    }
+
     // A. Custom handlers for yizi_oss_delivery_imgs (list and del)
     if (db_name === 'yizi_oss_delivery_imgs') {
       const ossConfig = {
@@ -1085,10 +1226,35 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
       const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${pk}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
       const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
       
+      let listData = result.rows.map(unpackRow);
+
+      // Custom enrich for orders: append user remark
+      if (db_name === 'yizi_orders' && listData.length > 0) {
+        const openids = [...new Set(listData.map(r => r.openid).filter(Boolean))];
+        if (openids.length > 0) {
+          const placeholders = openids.map((_, i) => `$${i + 1}`).join(', ');
+          // We check user_id, _id, and phone_number to support different OpenID strategies
+          const usersRes = await pool.query(
+            `SELECT "user_id", "_id", "phone_number", "remark" FROM "yizi_users" WHERE "user_id" IN (${placeholders}) OR "_id" IN (${placeholders}) OR "phone_number" IN (${placeholders})`, 
+            [...openids, ...openids, ...openids]
+          );
+          const userMap = {};
+          usersRes.rows.forEach(u => {
+            if (u.user_id) userMap[u.user_id] = u.remark;
+            if (u._id) userMap[u._id] = u.remark;
+            if (u.phone_number) userMap[u.phone_number] = u.remark;
+          });
+          listData = listData.map(r => ({
+            ...r,
+            user_remark: userMap[r.openid] || ''
+          }));
+        }
+      }
+
       return res.json({
         msg: 'ok',
         result: {
-          list: result.rows.map(unpackRow),
+          list: listData,
           total: total,
           page,
           page_size: pageSize
@@ -1222,7 +1388,11 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         if (db_name === 'yizi_orders' && result.rows.length > 0) {
             const rowOpenid = result.rows[0].openid;
             if (rowOpenid) {
-                orderEventEmitter.emit(`orderUpdate:${rowOpenid}`, { orderId: id, event: 'ADMIN_UPDATE' });
+                orderEventEmitter.emit(`orderUpdate:${rowOpenid}`, { 
+                    orderId: id, 
+                    event: 'ADMIN_UPDATE',
+                    completed: result.rows[0].completed === '1'
+                });
             }
         }
 
