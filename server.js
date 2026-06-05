@@ -594,7 +594,8 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
 
   try {
     // 1) Fetch true template pricing from database
-    const skuRes = await pool.query('SELECT data FROM "yizi_sku" WHERE uuid = $1', [data.planId]);
+    const skuPk = await getPrimaryKeyColumn('yizi_sku');
+    const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [data.planId]);
     if (skuRes.rows.length === 0) {
       return res.json({ msg: 'err', info: '商品模板不存在' });
     }
