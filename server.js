@@ -57,8 +57,17 @@ app.post('/admin/login', async (req, res) => {
     if (result.rows.length > 0) {
       const adminUser = result.rows[0];
       if (adminUser.password === hashedPassword) {
-        const token = jwt.sign({ account, is_super: adminUser.is_super }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
-        return res.json({ msg: 'ok', result: { token, account } });
+        let permissions = [];
+        let visible_projects = [];
+        if (adminUser.role_id) {
+          const roleRes = await pool.query('SELECT permissions, visible_projects FROM "yizi_roles" WHERE id = $1', [adminUser.role_id]);
+          if (roleRes.rows.length > 0) {
+            permissions = typeof roleRes.rows[0].permissions === 'string' ? JSON.parse(roleRes.rows[0].permissions || '[]') : (roleRes.rows[0].permissions || []);
+            visible_projects = typeof roleRes.rows[0].visible_projects === 'string' ? JSON.parse(roleRes.rows[0].visible_projects || '[]') : (roleRes.rows[0].visible_projects || []);
+          }
+        }
+        const token = jwt.sign({ account, is_super: adminUser.is_super, role_id: adminUser.role_id }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
+        return res.json({ msg: 'ok', result: { token, account, is_super: adminUser.is_super, role_id: adminUser.role_id, permissions, visible_projects } });
       }
     }
     res.json({ msg: 'err', info: '用户名或密码错误' });
@@ -67,6 +76,13 @@ app.post('/admin/login', async (req, res) => {
     res.json({ msg: 'err', info: '数据库连接或查询失败，请检查是否已在 Supabase 运行 SQL 创建 yizi_admins 表' });
   }
 });
+
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.user || !req.user.is_super) {
+    return res.status(403).json({ msg: 'err', info: 'Forbidden: 仅超级管理员可操作' });
+  }
+  next();
+};
 
 app.post('/admin/logout', (req, res) => {
   res.json({ msg: 'ok' });
@@ -94,16 +110,16 @@ app.post('/admin/reset_psw', authenticateToken, async (req, res) => {
 });
 
 // Admin management APIs
-app.post('/admin_list', authenticateToken, async (req, res) => {
+app.post('/admin_list', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, account, email, is_super, created_at FROM "yizi_admins" ORDER BY id ASC');
+    const result = await pool.query('SELECT id, account, email, is_super, role_id, data, created_at FROM "yizi_admins" ORDER BY id ASC');
     res.json({ msg: 'ok', result: result.rows });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
 });
 
-app.post('/admin_add', authenticateToken, async (req, res) => {
+app.post('/admin_add', authenticateToken, requireSuperAdmin, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.json({ msg: 'err', info: 'Email is required' });
   const account = email.split('@')[0];
@@ -120,7 +136,7 @@ app.post('/admin_add', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/admin_delete', authenticateToken, async (req, res) => {
+app.post('/admin_delete', authenticateToken, requireSuperAdmin, async (req, res) => {
   const { email } = req.body;
   try {
     await pool.query('DELETE FROM "yizi_admins" WHERE email = $1', [email]);
@@ -130,7 +146,7 @@ app.post('/admin_delete', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/admin_reset_secret', authenticateToken, async (req, res) => {
+app.post('/admin_reset_secret', authenticateToken, requireSuperAdmin, async (req, res) => {
   const { email } = req.body;
   const newTempPassword = '123456';
   const hashedPassword = crypto.createHash('sha256').update(newTempPassword).digest('hex');
@@ -142,10 +158,20 @@ app.post('/admin_reset_secret', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/admin_toggle_super', authenticateToken, async (req, res) => {
+app.post('/admin_toggle_super', authenticateToken, requireSuperAdmin, async (req, res) => {
   const { email, is_super } = req.body;
   try {
     await pool.query('UPDATE "yizi_admins" SET is_super = $1 WHERE email = $2', [is_super, email]);
+    res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+app.post('/admin_update_role', authenticateToken, requireSuperAdmin, async (req, res) => {
+  const { email, role_id } = req.body;
+  try {
+    await pool.query('UPDATE "yizi_admins" SET role_id = $1 WHERE email = $2', [role_id, email]);
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -745,10 +771,36 @@ app.post('/client/order/confirm', authenticateToken, async (req, res) => {
 // 2. RPC Main Channel
 // Action path example: /admin/orders/list, /admin/sku/add
 app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, async (req, res) => {
-  const module = req.params.module || 'admin';
+  const module = req.params.module || (req.path.startsWith('/client/') ? 'client' : 'admin');
   const db_name = getActualTableName(req.params.db_name);
   const action = req.params.action;
   const params = req.body;
+
+  // --- BEGIN RBAC PERMISSION CHECK ---
+  if (module === 'admin' && !req.user.is_super) {
+    let requiredPermission = null;
+    const short_db_name = db_name.replace('yizi_', '');
+    if (action.includes('list') || action.includes('get') || action === 'assets/list') {
+      requiredPermission = `${short_db_name}:read`;
+    } else if (action === 'add' || action === 'reset' || action === 'del' || action === 'trigger' || action === 'sts' || action === 'oss/delete') {
+      requiredPermission = `${short_db_name}:write`;
+    }
+
+    if (requiredPermission) {
+      if (!req.user.role_id) {
+        return res.status(403).json({ msg: 'err', info: 'Forbidden: 账号未分配任何角色权限' });
+      }
+      const roleRes = await pool.query('SELECT permissions FROM "yizi_roles" WHERE id = $1', [req.user.role_id]);
+      let userPerms = [];
+      if (roleRes.rows.length > 0 && roleRes.rows[0].permissions) {
+        userPerms = typeof roleRes.rows[0].permissions === 'string' ? JSON.parse(roleRes.rows[0].permissions) : roleRes.rows[0].permissions;
+      }
+      if (!userPerms.includes(requiredPermission)) {
+        return res.status(403).json({ msg: 'err', info: `Forbidden: 缺少必需权限 [${requiredPermission}]` });
+      }
+    }
+  }
+  // --- END RBAC PERMISSION CHECK ---
 
   try {
     // ----------------------------------------------------
@@ -923,6 +975,18 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         }
       });
     }
+
+    // E. Custom handler for yizi_users (sts)
+    if (db_name === 'yizi_users' && action === 'sts') {
+      try {
+        const token = await getOSSToken();
+        return res.json({ msg: 'ok', result: token });
+      } catch (error) {
+        console.error('[STS User Error]', error);
+        return res.json({ msg: 'err', info: error.message });
+      }
+    }
+
     // 1) List Query Action (with proper pagination total count and simple search filters)
     if (action === 'list' || action === 'list/next_token_mode') {
       // Support for batch querying comments or orders by ids

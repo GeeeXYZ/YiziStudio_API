@@ -93,7 +93,7 @@ async function runTests() {
   console.log('\n4. Testing user points/ticket...');
   // Create user first
   const testUserPhone = '135' + Math.floor(Math.random() * 90000000 + 10000000);
-  const userLogin = await fetch(`${server}/wx/login`, {
+  const userLogin = await fetch(`${server}/client/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone: testUserPhone, password: 'password123' })
@@ -127,6 +127,19 @@ async function runTests() {
   }).then(r => r.json());
   console.log('   STS Delivery Result:', deliveryStsToken.msg);
   if (deliveryStsToken.msg !== 'ok') throw new Error('Get delivery STS token failed');
+
+  // Step 6: Test client user STS endpoint
+  console.log('\n6. Testing /client/user/sts endpoint...');
+  const clientStsToken = await fetch(`${server}/client/user/sts`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${userLogin.result.token}`
+    },
+    body: JSON.stringify({})
+  }).then(r => r.json());
+  console.log('   Client STS Result:', clientStsToken);
+  if (clientStsToken.msg !== 'ok') throw new Error('Get client STS token failed');
 
   console.log('\n✅ All integration smoke tests PASSED successfully!');
 }

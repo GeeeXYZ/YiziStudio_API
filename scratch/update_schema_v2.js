@@ -18,9 +18,11 @@ async function run() {
   console.log('Connecting to database:', process.env.DATABASE_URL?.split('@')[1]);
   try {
     // 1. Create yizi_vip_settings table
+    console.log('Dropping old yizi_vip_settings table if exists...');
+    await pool.query('DROP TABLE IF EXISTS "yizi_vip_settings" CASCADE;');
     console.log('Creating yizi_vip_settings table...');
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS "yizi_vip_settings" (
+      CREATE TABLE "yizi_vip_settings" (
         "mobi" TEXT PRIMARY KEY,
         "type" TEXT DEFAULT 'my_models',
         "model_ids" JSONB DEFAULT '[]'::jsonb,
@@ -29,9 +31,11 @@ async function run() {
     `);
 
     // 2. Create yizi_front_sku_settings table
+    console.log('Dropping old yizi_front_sku_settings table if exists...');
+    await pool.query('DROP TABLE IF EXISTS "yizi_front_sku_settings" CASCADE;');
     console.log('Creating yizi_front_sku_settings table...');
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS "yizi_front_sku_settings" (
+      CREATE TABLE "yizi_front_sku_settings" (
         "id" TEXT PRIMARY KEY,
         "front_sku_settings" JSONB DEFAULT '[]'::jsonb
       );
