@@ -678,7 +678,7 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
             ? `https://${process.env.VERCEL_URL}/api_pipeline/trigger`
             : `http://localhost:${process.env.PORT || 9000}/api_pipeline/trigger`;
           
-          const authToken = req.headers.authorization; // Forward the same auth token
+          const internalSecret = process.env.JWT_SECRET || 'yizi_internal'; // Reuse JWT_SECRET as internal key
 
           if (Array.isArray(data.sets)) {
             data.sets.forEach((set, index) => {
@@ -701,7 +701,7 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
-                  'Authorization': authToken
+                  'X-Internal-Secret': internalSecret
                 },
                 body: JSON.stringify({
                   uuid: skuData.workflow,
@@ -1592,7 +1592,16 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
 });
 
 // API Pipeline Execution Endpoint
-app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
+app.post('/api_pipeline/trigger', (req, res, next) => {
+  // Allow internal self-invocation via shared secret (bypasses JWT)
+  const internalSecret = req.headers['x-internal-secret'];
+  if (internalSecret && internalSecret === (process.env.JWT_SECRET || 'yizi_internal')) {
+    req.user = { account: 'internal', unionid: 'system' }; // Fake user for internal calls
+    return next();
+  }
+  // Otherwise require normal JWT auth
+  authenticateToken(req, res, next);
+}, async (req, res) => {
   const { uuid, workflow_json, mock_order } = req.body;
   if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required' });
   
