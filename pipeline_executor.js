@@ -99,12 +99,19 @@ async function executeGrsaiPreset(node, inputs, env) {
   const token = apiKey.trim().replace(/^Bearer\s+/i, '');
 
   const prompt = inputs.prompt || node.data.prompt || '';
-  const ref_image = inputs.ref_image || node.data.ref_image || [];
   
+  // Combine ordered image inputs
+  let combined_images = [
+    inputs.ref_image_1 || node.data.ref_image_1,
+    inputs.ref_image_2 || node.data.ref_image_2,
+    inputs.ref_image_3 || node.data.ref_image_3,
+    inputs.ref_images || node.data.ref_image || []
+  ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+
   const payload = {
     model: node.data.model || 'gpt-image-2',
     prompt: prompt,
-    images: Array.isArray(ref_image) ? ref_image : (ref_image ? [ref_image] : []),
+    images: combined_images,
     aspectRatio: node.data.resolution || '1024x1024',
     replyType: 'async'
   };
@@ -195,8 +202,40 @@ export async function runPipeline(workflowJson, orderContext, pool) {
               order_id: orderContext.order_id,
               set_index: orderContext.set_index || 0
             },
-            model_name: orderContext.model_name || ''
+            model_name: orderContext.model_name || '',
+            model_uuid: orderContext.model_uuid || ''
           };
+          
+          // Random Pose Image Fetching
+          outputs.random_pose_image = '';
+          if (outputs.model_uuid) {
+            try {
+              const ossClient = new OSS({
+                region: process.env.OSS_REGION,
+                accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+                accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+                bucket: process.env.OSS_BUCKET
+              });
+              const poseFolder = orderContext.sku_pose_folder || 'poses';
+              const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
+              
+              const result = await ossClient.list({ prefix, 'max-keys': 100 });
+              if (result.objects && result.objects.length > 0) {
+                // filter out directory itself if returned
+                const files = result.objects.filter(obj => !obj.name.endsWith('/'));
+                if (files.length > 0) {
+                  const randomFile = files[Math.floor(Math.random() * files.length)];
+                  outputs.random_pose_image = randomFile.url;
+                  console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
+                }
+              } else {
+                console.warn(`[Pipeline] No pose images found for model ${outputs.model_uuid} in folder ${poseFolder}`);
+              }
+            } catch (err) {
+              console.warn(`[Pipeline] Failed to fetch random pose from OSS for model ${outputs.model_uuid}:`, err.message);
+            }
+          }
+
           // Also map generic 'output' for backward compatibility
           outputs.output = outputs;
           break;
