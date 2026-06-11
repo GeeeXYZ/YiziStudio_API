@@ -83,7 +83,7 @@ async function uploadToOSS(ossClient, url, openid, order_id, set_index, filename
 /**
  * Executes a single Grsai API Call with polling
  */
-async function executeGrsaiPreset(node, inputs, env) {
+async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   const endpoint = process.env.GRSAI_API_ENDPOINT || env.GRSAI_API_ENDPOINT;
   const apiKey = process.env.GRSAI_API_KEY || env.GRSAI_API_KEY;
 
@@ -136,6 +136,24 @@ async function executeGrsaiPreset(node, inputs, env) {
   const taskId = data.id;
   console.log(`[Grsai Execute] Task ID ${taskId} received. Polling results...`);
 
+  // DB Logging: Insert Task
+  if (pool && orderContext) {
+    try {
+      const q = `
+        INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
+        VALUES ($1, $2, $3, 'pending', 0, NOW(), NOW())
+      `;
+      await pool.query(q, [taskId, orderContext.order_id || 'unknown', payload.model]);
+
+      // Lazy Cleanup: Delete logs older than 7 days
+      pool.query(`DELETE FROM yizi_api_logs WHERE created_at < NOW() - INTERVAL '7 days'`).catch(err => {
+        console.warn('[DB] Failed to cleanup old logs:', err.message);
+      });
+    } catch (err) {
+      console.warn(`[DB] Failed to insert api log for ${taskId}:`, err.message);
+    }
+  }
+
   // Polling loop
   for (let i = 0; i < 60; i++) { // Max 60 * 3s = 180s
     await sleep(3000);
@@ -150,15 +168,33 @@ async function executeGrsaiPreset(node, inputs, env) {
     if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
       console.log(`[Grsai Execute] Task ${taskId} succeeded!`);
       const urls = pollData.results.map(r => r.url);
+      
+      // DB Logging: Success
+      if (pool) {
+        pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
+      }
+
       return { output_images: urls };
     } else if (pollData.status === 'failed') {
+      // DB Logging: Failed
+      if (pool) {
+        pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Task failed internally', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+      }
       throw new Error(`Grsai Task ${taskId} failed.`);
     } else {
       console.log(`[Grsai Execute] Task ${taskId} status: ${pollData.status} (${pollData.progress || 0}%)`);
+      // DB Logging: Progress
+      if (pool) {
+        pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', pollData.progress || 0, taskId]).catch(e => console.warn(e.message));
+      }
     }
   }
 
-  throw new Error(`Grsai Task ${taskId} timed out.`);
+  // Timeout failure logging
+  if (pool) {
+    pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 180s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+  }
+  throw new Error(`Grsai Task ${taskId} timed out after 180s`);
 }
 
 /**
@@ -243,7 +279,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           break;
 
         case 'preset_grsai':
-          outputs = await executeGrsaiPreset(node, inputs, process.env);
+          outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
           break;
 
         case 'text_input':

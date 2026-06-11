@@ -1524,11 +1524,23 @@ app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
   // Respond immediately so frontend isn't blocked
   res.json({ msg: 'ok', info: 'Pipeline execution started in background' });
 
-  console.log(`[API Pipeline Trigger] Background task started for ${uuid || 'test'}`);
-  // Run asynchronously without awaiting in the express handler
-  runPipeline(workflow_json, mock_order || {}, pool).catch(err => {
-    console.error(`[API Pipeline Background Error]`, err);
+  // Run pipeline in background, pass pool for DB logging
+  runPipeline(workflow_json, mock_order, pool).catch(err => {
+    console.error('[Pipeline Error]', err);
   });
+});
+
+// GET /api_pipeline/logs
+// Fetch the latest 50 API execution logs
+app.get('/api_pipeline/logs', async (req, res) => {
+  try {
+    const query = 'SELECT * FROM yizi_api_logs ORDER BY created_at DESC LIMIT 50';
+    const result = await pool.query(query);
+    res.json({ msg: 'ok', data: result.rows });
+  } catch (err) {
+    console.error('[Logs Error]', err);
+    res.status(500).json({ msg: 'err', info: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 9000;
