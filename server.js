@@ -1597,25 +1597,26 @@ app.post('/api_pipeline/trigger', (req, res, next) => {
   // Allow internal self-invocation via shared secret (bypasses JWT)
   const internalSecret = req.headers['x-internal-secret'];
   if (internalSecret && internalSecret === (process.env.JWT_SECRET || 'yizi_internal')) {
-    req.user = { account: 'internal', unionid: 'system' }; // Fake user for internal calls
+    req.user = { account: 'internal', unionid: 'system' };
     return next();
   }
-  // Otherwise require normal JWT auth
   authenticateToken(req, res, next);
 }, async (req, res) => {
-  const { uuid, workflow_json, mock_order } = req.body;
+  const { workflow_json, mock_order } = req.body;
   if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required' });
   
-  // Await the pipeline execution! Do NOT respond immediately.
-  // This forces Vercel to keep this function instance alive up to its maxDuration (300s).
+  // Respond immediately so the caller (order create) is unblocked
+  res.json({ msg: 'ok', info: 'Pipeline started' });
+
+  // IMPORTANT: await the pipeline AFTER sending response.
+  // The await keeps this async handler pending, which keeps the Vercel function alive
+  // up to maxDuration (300s). Without await, the handler returns and Vercel kills the function.
   try {
-    console.log('[Trigger Endpoint] Starting background pipeline execution...');
-    const result = await runPipeline(workflow_json, mock_order, pool);
-    console.log('[Trigger Endpoint] Pipeline execution finished.');
-    res.json({ msg: 'ok', info: 'Pipeline execution finished', result });
+    console.log('[Trigger] Starting pipeline execution...');
+    await runPipeline(workflow_json, mock_order, pool);
+    console.log('[Trigger] Pipeline completed successfully.');
   } catch (err) {
-    console.error('[Trigger Endpoint Pipeline Error]', err);
-    res.status(500).json({ msg: 'err', info: err.message });
+    console.error('[Trigger] Pipeline error:', err.message);
   }
 });
 
