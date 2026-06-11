@@ -138,6 +138,7 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   console.log(`[Grsai Execute] Task ID ${taskId} received. Polling results...`);
 
   // DB Logging: Insert Task
+  let logInserted = false;
   if (pool && orderContext) {
     try {
       const q = `
@@ -145,6 +146,7 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
         VALUES ($1, $2, $3, 'pending', 0, NOW(), NOW())
       `;
       await pool.query(q, [taskId, orderContext.order_id || 'unknown', payload.model]);
+      logInserted = true;
 
       // Lazy Cleanup: Delete logs older than 7 days
       pool.query(`DELETE FROM yizi_api_logs WHERE created_at < NOW() - INTERVAL '7 days'`).catch(err => {
@@ -156,46 +158,77 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   }
 
   // Polling loop
-  for (let i = 0; i < 300; i++) { // Max 300 * 5s = 1500s (25 minutes)
-    await sleep(5000);
-    const pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000)
-    });
-    
-    if (!pollRes.ok) continue;
-    const pollData = await pollRes.json();
-    
-    if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
-      console.log(`[Grsai Execute] Task ${taskId} succeeded!`);
-      const urls = pollData.results.map(r => r.url);
+  try {
+    let consecutiveErrors = 0;
+    for (let i = 0; i < 300; i++) { // Max 300 * 5s = 1500s (25 minutes)
+      await sleep(5000);
       
-      // DB Logging: Success
-      if (pool) {
-        pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
+      let pollRes;
+      try {
+        pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: AbortSignal.timeout(15000)
+        });
+      } catch (fetchErr) {
+        consecutiveErrors++;
+        console.warn(`[Grsai Execute] Poll fetch error (${consecutiveErrors}):`, fetchErr.message);
+        if (consecutiveErrors >= 10) {
+          throw new Error(`Poll failed after ${consecutiveErrors} consecutive network errors: ${fetchErr.message}`);
+        }
+        continue;
       }
+      
+      if (!pollRes.ok) {
+        consecutiveErrors++;
+        console.warn(`[Grsai Execute] Poll HTTP ${pollRes.status} (${consecutiveErrors})`);
+        if (consecutiveErrors >= 10) {
+          throw new Error(`Poll failed after ${consecutiveErrors} consecutive HTTP errors (last: ${pollRes.status})`);
+        }
+        continue;
+      }
+      
+      consecutiveErrors = 0;
+      const pollData = await pollRes.json();
+      
+      if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
+        console.log(`[Grsai Execute] Task ${taskId} succeeded!`);
+        const urls = pollData.results.map(r => r.url);
+        
+        // DB Logging: Success — pass array directly, JSONB column handles it
+        if (pool && logInserted) {
+          pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
+        }
 
-      return { output_images: urls, output: urls };
-    } else if (pollData.status === 'failed') {
-      // DB Logging: Failed
-      if (pool) {
-        pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Task failed internally', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
-      }
-      throw new Error(`Grsai Task ${taskId} failed.`);
-    } else {
-      console.log(`[Grsai Execute] Task ${taskId} status: ${pollData.status} (${pollData.progress || 0}%)`);
-      // DB Logging: Progress
-      if (pool) {
-        pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', pollData.progress || 0, taskId]).catch(e => console.warn(e.message));
+        return { output_images: urls, output: urls };
+      } else if (pollData.status === 'failed') {
+        const errorDetail = pollData.error || pollData.message || 'Task failed internally';
+        // DB Logging: Failed
+        if (pool && logInserted) {
+          pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [errorDetail, taskId]).catch(e => console.warn(e.message));
+        }
+        throw new Error(`Grsai Task ${taskId} failed: ${errorDetail}`);
+      } else {
+        console.log(`[Grsai Execute] Task ${taskId} status: ${pollData.status} (${pollData.progress || 0}%)`);
+        // DB Logging: Progress
+        if (pool && logInserted) {
+          pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', pollData.progress || 0, taskId]).catch(e => console.warn(e.message));
+        }
       }
     }
-  }
 
-  // Timeout failure logging
-  if (pool) {
-    pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 1500s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+    // Timeout failure logging
+    if (pool && logInserted) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 1500s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+    }
+    throw new Error(`Grsai Task ${taskId} timed out after 1500s`);
+    
+  } catch (pipelineErr) {
+    // Catch-all: if ANY exception occurs during polling, ensure the log is marked failed
+    if (pool && logInserted) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [pipelineErr.message || 'Unknown error', taskId]).catch(e => console.warn(e.message));
+    }
+    throw pipelineErr;
   }
-  throw new Error(`Grsai Task ${taskId} timed out after 1500s`);
 }
 
 /**
