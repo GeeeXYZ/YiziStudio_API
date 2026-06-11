@@ -66,7 +66,8 @@ async function uploadToOSS(ossClient, url, openid, order_id, set_index, filename
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to download image: ${response.statusText}`);
-    const buffer = await response.buffer();
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
     
     const ext = url.split('.').pop().split('?')[0].match(/^(jpg|jpeg|png|webp|gif)$/i) ? RegExp.$1 : 'png';
     const filename = `${filenamePrefix}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
@@ -174,7 +175,7 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
         pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
       }
 
-      return { output_images: urls };
+      return { output_images: urls, output: urls };
     } else if (pollData.status === 'failed') {
       // DB Logging: Failed
       if (pool) {
@@ -381,12 +382,16 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           break;
 
         case 'oss_output':
-          // inputs.images should be an array of URLs, inputs.order_info has oss path details
-          const imagesToUpload = inputs.images || [];
+          // Normalize: accept images from any reasonable input key, and ensure array
+          let rawImages = inputs.images || inputs.output_images || inputs.output || [];
+          const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
+          const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && u.startsWith('http'));
           const orderInfo = inputs.order_info || orderContext;
           
-          if (!imagesToUpload.length) {
-             console.log(`[Pipeline] OSS Output: No images to upload.`);
+          console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
+          
+          if (!filteredImages.length) {
+             console.log(`[Pipeline] OSS Output: No valid images to upload. Raw inputs.images=${JSON.stringify(inputs.images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`);
              break;
           }
 
@@ -409,11 +414,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           const client = new OSS(ossConfig);
           const uploadedUrls = [];
 
-          for (let i = 0; i < imagesToUpload.length; i++) {
-             console.log(`[Pipeline] Uploading image ${i+1}/${imagesToUpload.length} to OSS...`);
+          for (let i = 0; i < filteredImages.length; i++) {
+             console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
              const url = await uploadToOSS(
                client, 
-               imagesToUpload[i], 
+               filteredImages[i], 
                orderInfo.openid, 
                orderInfo.order_id, 
                orderInfo.set_index || 0,
