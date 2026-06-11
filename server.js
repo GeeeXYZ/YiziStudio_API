@@ -647,15 +647,13 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
     const nextPoints = currentPoints - totalCost;
     await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "user_id" = $2 OR "phone_number" = $3', [nextPoints.toString(), unionid, unionid]);
 
-    res.json({ msg: 'ok', result: { id: orderId } });
-
-    // 5) Auto Trigger API Pipeline if configured
+    // 5) Auto Trigger API Pipeline BEFORE responding
+    //    Must happen before res.json() because Vercel kills the function after response is sent.
     const isAutoTrigger = skuData.auto_trigger === true || skuData.auto_trigger === 'true' || skuData.auto_trigger === 1 || skuData.auto_trigger === '1';
     console.log(`[Auto Trigger Check] Order ${orderId} | auto_trigger=${skuData.auto_trigger} (resolved: ${isAutoTrigger}) | workflow=${skuData.workflow} | workflow_type=${skuData.workflow_type}`);
     
     if (isAutoTrigger && skuData.workflow && skuData.workflow_type === 'api_pipeline') {
       try {
-        // yizi_cases primary key is `uuid`, NOT `id`
         const caseRes = await pool.query('SELECT data FROM "yizi_cases" WHERE uuid = $1', [skuData.workflow]);
         console.log(`[Auto Trigger] Queried yizi_cases for uuid=${skuData.workflow}, found ${caseRes.rows.length} rows`);
         
@@ -667,21 +665,19 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
           if (skuData.body_type === '特殊') resolvedPoseFolder = 'special_poses';
           if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder;
 
-          // Resolve the workflow_json (node graph)
-          const pipelineInput = workflowData.workflow_json || JSON.stringify(workflowData);
+          const pipelineInput = workflowData.workflow_json || workflowData;
           const workflowJsonStr = typeof pipelineInput === 'string' ? pipelineInput : JSON.stringify(pipelineInput);
 
-          // Self-invocation: fire separate HTTP requests to /api_pipeline/trigger
-          // Each request gets its own Vercel function instance with independent 300s timeout
+          // Self-invocation URL
           const selfUrl = process.env.VERCEL_URL 
             ? `https://${process.env.VERCEL_URL}/api_pipeline/trigger`
             : `http://localhost:${process.env.PORT || 9000}/api_pipeline/trigger`;
-          
           const internalSecret = process.env.JWT_SECRET || 'yizi_internal';
 
           if (Array.isArray(data.sets)) {
-            for (let index = 0; index < data.sets.length; index++) {
-              const set = data.sets[index];
+            // Await all fetch dispatches in parallel — we only wait for the HTTP handshake,
+            // NOT for the pipeline to finish (the trigger endpoint handles that in its own instance).
+            const triggerPromises = data.sets.map((set, index) => {
               const orderContext = {
                 isRealOrder: true,
                 openid: unionid,
@@ -694,36 +690,39 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 model_name: data.model_name || ''
               };
               
-              console.log(`[Auto Trigger] Self-invoking /api_pipeline/trigger for Order ${orderId} Set ${index}`);
+              console.log(`[Auto Trigger] Dispatching pipeline for Order ${orderId} Set ${index}`);
               
-              // Fire-and-forget HTTP call
-              fetch(selfUrl, {
+              return fetch(selfUrl, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
                   'X-Internal-Secret': internalSecret
                 },
                 body: JSON.stringify({
-                  uuid: skuData.workflow,
                   workflow_json: workflowJsonStr,
                   mock_order: orderContext
                 })
+              }).then(r => {
+                console.log(`[Auto Trigger] Set ${index} dispatch responded: ${r.status}`);
               }).catch(err => {
-                console.error(`[Auto Trigger Error] Self-invocation for Order ${orderId} Set ${index}:`, err.message);
+                console.error(`[Auto Trigger Error] Set ${index}:`, err.message);
               });
-            }
-            
-            // Critical: Yield the event loop slightly so the outgoing fetch requests are actually sent 
-            // over the network before Vercel suspends this lambda instance.
-            await new Promise(r => setTimeout(r, 100));
+            });
+
+            await Promise.all(triggerPromises);
+            console.log(`[Auto Trigger] All ${data.sets.length} pipeline(s) dispatched for Order ${orderId}`);
           }
         } else {
           console.warn(`[Auto Trigger] No workflow found in yizi_cases for uuid=${skuData.workflow}`);
         }
       } catch (triggerErr) {
         console.error('[Auto Trigger Pipeline Error]', triggerErr);
+        // Don't fail the order — trigger failure is non-fatal
       }
     }
+
+    // 6) Respond to client AFTER trigger dispatch is confirmed
+    res.json({ msg: 'ok', result: { id: orderId } });
 
   } catch (error) {
     console.error('[Order Create Error]', error);
