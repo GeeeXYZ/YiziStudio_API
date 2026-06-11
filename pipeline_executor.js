@@ -1,4 +1,3 @@
-import fetch from 'node-fetch';
 import OSS from 'ali-oss';
 import crypto from 'crypto';
 
