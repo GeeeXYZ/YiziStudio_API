@@ -667,11 +667,21 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
           if (skuData.body_type === '特殊') resolvedPoseFolder = 'special_poses';
           if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder;
 
-          // Direct pipeline execution — proven working approach
-          const pipelineInput = workflowData.workflow_json || workflowData;
+          // Resolve the workflow_json (node graph)
+          const pipelineInput = workflowData.workflow_json || JSON.stringify(workflowData);
+          const workflowJsonStr = typeof pipelineInput === 'string' ? pipelineInput : JSON.stringify(pipelineInput);
+
+          // Self-invocation: fire separate HTTP requests to /api_pipeline/trigger
+          // Each request gets its own Vercel function instance with independent 300s timeout
+          const selfUrl = process.env.VERCEL_URL 
+            ? `https://${process.env.VERCEL_URL}/api_pipeline/trigger`
+            : `http://localhost:${process.env.PORT || 9000}/api_pipeline/trigger`;
+          
+          const internalSecret = process.env.JWT_SECRET || 'yizi_internal';
 
           if (Array.isArray(data.sets)) {
-            data.sets.forEach((set, index) => {
+            for (let index = 0; index < data.sets.length; index++) {
+              const set = data.sets[index];
               const orderContext = {
                 isRealOrder: true,
                 openid: unionid,
@@ -684,12 +694,28 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 model_name: data.model_name || ''
               };
               
-              console.log(`[Auto Trigger] Launching pipeline for Order ${orderId} Set ${index}`);
+              console.log(`[Auto Trigger] Self-invoking /api_pipeline/trigger for Order ${orderId} Set ${index}`);
               
-              runPipeline(pipelineInput, orderContext, pool).catch(err => {
-                console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err);
+              // Fire-and-forget HTTP call
+              fetch(selfUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Internal-Secret': internalSecret
+                },
+                body: JSON.stringify({
+                  uuid: skuData.workflow,
+                  workflow_json: workflowJsonStr,
+                  mock_order: orderContext
+                })
+              }).catch(err => {
+                console.error(`[Auto Trigger Error] Self-invocation for Order ${orderId} Set ${index}:`, err.message);
               });
-            });
+            }
+            
+            // Critical: Yield the event loop slightly so the outgoing fetch requests are actually sent 
+            // over the network before Vercel suspends this lambda instance.
+            await new Promise(r => setTimeout(r, 100));
           }
         } else {
           console.warn(`[Auto Trigger] No workflow found in yizi_cases for uuid=${skuData.workflow}`);
@@ -1581,13 +1607,17 @@ app.post('/api_pipeline/trigger', (req, res, next) => {
   const { uuid, workflow_json, mock_order } = req.body;
   if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required' });
   
-  // Respond immediately so frontend isn't blocked
-  res.json({ msg: 'ok', info: 'Pipeline execution started in background' });
-
-  // Run pipeline in background, pass pool for DB logging
-  runPipeline(workflow_json, mock_order, pool).catch(err => {
-    console.error('[Pipeline Error]', err);
-  });
+  // Await the pipeline execution! Do NOT respond immediately.
+  // This forces Vercel to keep this function instance alive up to its maxDuration (300s).
+  try {
+    console.log('[Trigger Endpoint] Starting background pipeline execution...');
+    const result = await runPipeline(workflow_json, mock_order, pool);
+    console.log('[Trigger Endpoint] Pipeline execution finished.');
+    res.json({ msg: 'ok', info: 'Pipeline execution finished', result });
+  } catch (err) {
+    console.error('[Trigger Endpoint Pipeline Error]', err);
+    res.status(500).json({ msg: 'err', info: err.message });
+  }
 });
 
 // GET /api_pipeline/logs
