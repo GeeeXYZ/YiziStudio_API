@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import Core from '@alicloud/pop-core';
 import OSS from 'ali-oss';
 import { EventEmitter } from 'events';
+import { runPipeline } from './pipeline_executor.js';
 
 export const orderEventEmitter = new EventEmitter();
 orderEventEmitter.setMaxListeners(100);
@@ -941,6 +942,37 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
     // ----------------------------------------------------
     // Custom Handlers for Special Table / Action overrides
     // ----------------------------------------------------
+
+    if (db_name === 'yizi_users' && action === 'topup') {
+      const { user_id, amount, remark } = params;
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无效' });
+      if (!remark) return res.json({ msg: 'err', info: '充值备注不能为空' });
+
+      const userRes = await pool.query('SELECT "_id", "points", "phone_number" FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1 OR "_id" = $1', [user_id]);
+      if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存在' });
+      
+      const user = userRes.rows[0];
+      const currentPoints = parseFloat(user.points) || 0;
+      const newPoints = currentPoints + numAmount;
+      
+      const orderId = 'topup_' + crypto.randomBytes(6).toString('hex');
+      const orderData = {
+          total_cost: numAmount,
+          planTitle: "Admin Manual Top-up",
+          type: "topup",
+          remark: remark,
+          operator: req.user.account
+      };
+
+      await pool.query('UPDATE "yizi_users" SET "points" = $1 WHERE "_id" = $2', [newPoints.toString(), user._id]);
+      await pool.query(
+          'INSERT INTO "yizi_recharge_orders" (id, user_id, amount, operator, remark, datetime, data) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+          [orderId, user._id, numAmount, req.user.account, remark, new Date().toISOString(), JSON.stringify(orderData)]
+      );
+
+      return res.json({ msg: 'ok', info: `成功为用户操作 ${numAmount} coz` });
+    }
     
     if (db_name === 'yizi_orders' && action === 'refund') {
       const order_id = params.id;
@@ -1355,6 +1387,11 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         // -----------------------
 
         const rawData = params.data || {};
+        
+        if (db_name === 'yizi_users' && 'points' in rawData) {
+            delete rawData.points;
+        }
+
         const finalData = {};
         let extraData = {};
 
@@ -1479,9 +1516,20 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
   }
 });
 
+// API Pipeline Execution Endpoint
+app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
+  const { uuid, workflow_json, mock_order } = req.body;
+  if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required' });
+  
+  // Respond immediately so frontend isn't blocked
+  res.json({ msg: 'ok', info: 'Pipeline execution started in background' });
 
-
-
+  console.log(`[API Pipeline Trigger] Background task started for ${uuid || 'test'}`);
+  // Run asynchronously without awaiting in the express handler
+  runPipeline(workflow_json, mock_order || {}, pool).catch(err => {
+    console.error(`[API Pipeline Background Error]`, err);
+  });
+});
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {
