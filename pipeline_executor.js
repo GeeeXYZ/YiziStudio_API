@@ -117,6 +117,25 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
     replyType: 'async'
   };
 
+  // DB Logging: Insert BEFORE submitting to Grsai (so the log is visible even if function dies)
+  const tempLogId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  let logInserted = false;
+  if (pool && orderContext) {
+    try {
+      await pool.query(
+        `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
+         VALUES ($1, $2, $3, 'submitting', 0, NOW(), NOW())`,
+        [tempLogId, orderContext.order_id || 'unknown', payload.model]
+      );
+      logInserted = true;
+
+      // Lazy Cleanup: Delete logs older than 7 days
+      pool.query(`DELETE FROM yizi_api_logs WHERE created_at < NOW() - INTERVAL '7 days'`).catch(() => {});
+    } catch (err) {
+      console.warn(`[DB] Failed to insert api log:`, err.message);
+    }
+  }
+
   console.log(`[Grsai Execute] Submitting task to ${generateUrl} with payload:`, JSON.stringify(payload));
   const res = await fetch(generateUrl, {
     method: 'POST',
@@ -126,34 +145,30 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   });
 
   if (!res.ok) {
-    throw new Error(`Grsai API error: [${res.status}] ${await res.text()}`);
+    const errText = await res.text();
+    if (pool && logInserted) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [`API error: [${res.status}] ${errText}`, tempLogId]).catch(() => {});
+    }
+    throw new Error(`Grsai API error: [${res.status}] ${errText}`);
   }
 
   const data = await res.json();
   if (!data.id) {
+    if (pool && logInserted) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'No task ID returned', updated_at = NOW() WHERE id = $1`, [tempLogId]).catch(() => {});
+    }
     throw new Error('Grsai API did not return a task ID');
   }
 
   const taskId = data.id;
   console.log(`[Grsai Execute] Task ID ${taskId} received. Polling results...`);
 
-  // DB Logging: Insert Task
-  let logInserted = false;
-  if (pool && orderContext) {
+  // Update log with real task ID
+  if (pool && logInserted) {
     try {
-      const q = `
-        INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
-        VALUES ($1, $2, $3, 'pending', 0, NOW(), NOW())
-      `;
-      await pool.query(q, [taskId, orderContext.order_id || 'unknown', payload.model]);
-      logInserted = true;
-
-      // Lazy Cleanup: Delete logs older than 7 days
-      pool.query(`DELETE FROM yizi_api_logs WHERE created_at < NOW() - INTERVAL '7 days'`).catch(err => {
-        console.warn('[DB] Failed to cleanup old logs:', err.message);
-      });
+      await pool.query(`UPDATE yizi_api_logs SET id = $1, status = 'pending', updated_at = NOW() WHERE id = $2`, [taskId, tempLogId]);
     } catch (err) {
-      console.warn(`[DB] Failed to insert api log for ${taskId}:`, err.message);
+      console.warn(`[DB] Failed to update log ID from ${tempLogId} to ${taskId}:`, err.message);
     }
   }
 
