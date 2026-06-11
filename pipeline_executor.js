@@ -205,6 +205,53 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           outputs = await executeGrsaiPreset(node, inputs, process.env);
           break;
 
+        case 'text_input':
+          outputs.output = node.data.text || '';
+          break;
+
+        case 'string_concat':
+          const s1 = inputs.str1 || '';
+          const s2 = inputs.str2 || '';
+          const s3 = inputs.str3 || '';
+          const s4 = inputs.str4 || '';
+          // filter out empty strings and join with newline
+          outputs.output = [s1, s2, s3, s4].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
+          break;
+
+        case 'llm_call':
+          const llmUrl = node.data.api_url || 'https://api.openai.com/v1';
+          const llmKey = node.data.api_key || '';
+          const llmModel = node.data.model_name || 'gpt-3.5-turbo';
+          const llmPrompt = inputs.prompt || '';
+          
+          if (!llmKey) throw new Error(`LLM Node missing API Key`);
+
+          console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions`);
+          const chatRes = await fetch(`${llmUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${llmKey}`
+            },
+            body: JSON.stringify({
+              model: llmModel,
+              messages: [{ role: 'user', content: llmPrompt }]
+            })
+          });
+
+          if (!chatRes.ok) {
+            throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
+          }
+
+          const chatData = await chatRes.json();
+          outputs.output = chatData.choices?.[0]?.message?.content || '';
+          break;
+
+        case 'image_preview':
+          // Passthrough the image url
+          outputs.output = inputs.image_url || inputs.output || node.data.preview_url || '';
+          break;
+
         case 'oss_output':
           // inputs.images should be an array of URLs, inputs.order_info has oss path details
           const imagesToUpload = inputs.images || [];
