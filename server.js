@@ -665,7 +665,20 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
           let resolvedPoseFolder = 'poses';
           if (skuData.body_type === '半身') resolvedPoseFolder = 'half_poses';
           if (skuData.body_type === '特殊') resolvedPoseFolder = 'special_poses';
-          if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder; // Explicit override if set
+          if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder;
+
+          // Resolve the workflow_json (node graph)
+          const pipelineInput = workflowData.workflow_json || JSON.stringify(workflowData);
+          const workflowJsonStr = typeof pipelineInput === 'string' ? pipelineInput : JSON.stringify(pipelineInput);
+
+          // Self-invocation: fire separate HTTP requests to /api_pipeline/trigger
+          // Each request gets its own Vercel function instance with independent 300s timeout
+          // This decouples pipeline execution from the order creation request lifecycle
+          const selfUrl = process.env.VERCEL_URL 
+            ? `https://${process.env.VERCEL_URL}/api_pipeline/trigger`
+            : `http://localhost:${process.env.PORT || 9000}/api_pipeline/trigger`;
+          
+          const authToken = req.headers.authorization; // Forward the same auth token
 
           if (Array.isArray(data.sets)) {
             data.sets.forEach((set, index) => {
@@ -681,12 +694,24 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 model_name: data.model_name || ''
               };
               
-              // workflowData.workflow_json contains the node graph as a string
-              const pipelineInput = workflowData.workflow_json || workflowData;
-              console.log(`[Auto Trigger] Launching pipeline for Order ${orderId} Set ${index}, input type: ${typeof pipelineInput}`);
+              console.log(`[Auto Trigger] Self-invoking /api_pipeline/trigger for Order ${orderId} Set ${index}`);
               
-              runPipeline(pipelineInput, orderContext, pool).catch(err => {
-                console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err);
+              // Fire-and-forget HTTP call — each runs in its own function instance
+              fetch(selfUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': authToken
+                },
+                body: JSON.stringify({
+                  uuid: skuData.workflow,
+                  workflow_json: workflowJsonStr,
+                  mock_order: orderContext
+                })
+              }).then(r => {
+                console.log(`[Auto Trigger] Self-invocation for Set ${index} responded: ${r.status}`);
+              }).catch(err => {
+                console.error(`[Auto Trigger Error] Self-invocation for Order ${orderId} Set ${index}:`, err.message);
               });
             });
           }
