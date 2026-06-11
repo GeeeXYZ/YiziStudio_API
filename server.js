@@ -667,18 +667,8 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
           if (skuData.body_type === '特殊') resolvedPoseFolder = 'special_poses';
           if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder;
 
-          // Resolve the workflow_json (node graph)
-          const pipelineInput = workflowData.workflow_json || JSON.stringify(workflowData);
-          const workflowJsonStr = typeof pipelineInput === 'string' ? pipelineInput : JSON.stringify(pipelineInput);
-
-          // Self-invocation: fire separate HTTP requests to /api_pipeline/trigger
-          // Each request gets its own Vercel function instance with independent 300s timeout
-          // This decouples pipeline execution from the order creation request lifecycle
-          const selfUrl = process.env.VERCEL_URL 
-            ? `https://${process.env.VERCEL_URL}/api_pipeline/trigger`
-            : `http://localhost:${process.env.PORT || 9000}/api_pipeline/trigger`;
-          
-          const internalSecret = process.env.JWT_SECRET || 'yizi_internal'; // Reuse JWT_SECRET as internal key
+          // Direct pipeline execution — proven working approach
+          const pipelineInput = workflowData.workflow_json || workflowData;
 
           if (Array.isArray(data.sets)) {
             data.sets.forEach((set, index) => {
@@ -694,24 +684,10 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 model_name: data.model_name || ''
               };
               
-              console.log(`[Auto Trigger] Self-invoking /api_pipeline/trigger for Order ${orderId} Set ${index}`);
+              console.log(`[Auto Trigger] Launching pipeline for Order ${orderId} Set ${index}`);
               
-              // Fire-and-forget HTTP call — each runs in its own function instance
-              fetch(selfUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Internal-Secret': internalSecret
-                },
-                body: JSON.stringify({
-                  uuid: skuData.workflow,
-                  workflow_json: workflowJsonStr,
-                  mock_order: orderContext
-                })
-              }).then(r => {
-                console.log(`[Auto Trigger] Self-invocation for Set ${index} responded: ${r.status}`);
-              }).catch(err => {
-                console.error(`[Auto Trigger Error] Self-invocation for Order ${orderId} Set ${index}:`, err.message);
+              runPipeline(pipelineInput, orderContext, pool).catch(err => {
+                console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err);
               });
             });
           }
