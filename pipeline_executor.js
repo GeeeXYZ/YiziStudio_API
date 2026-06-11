@@ -155,8 +155,8 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   }
 
   // Polling loop
-  for (let i = 0; i < 60; i++) { // Max 60 * 3s = 180s
-    await sleep(3000);
+  for (let i = 0; i < 300; i++) { // Max 300 * 5s = 1500s (25 minutes)
+    await sleep(5000);
     const pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
       headers: { 'Authorization': `Bearer ${token}` },
       signal: AbortSignal.timeout(15000)
@@ -192,9 +192,9 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
 
   // Timeout failure logging
   if (pool) {
-    pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 180s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+    pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 1500s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
   }
-  throw new Error(`Grsai Task ${taskId} timed out after 180s`);
+  throw new Error(`Grsai Task ${taskId} timed out after 1500s`);
 }
 
 /**
@@ -202,7 +202,13 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
  */
 export async function runPipeline(workflowJson, orderContext, pool) {
   try {
-    const { nodes, edges } = JSON.parse(workflowJson);
+    const parsedData = typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson;
+    const { nodes, edges } = parsedData;
+    
+    if (!nodes || !edges) {
+      throw new Error("Invalid workflow data: Missing 'nodes' or 'edges' arrays");
+    }
+
     const graph = buildGraph(nodes, edges);
     const sortedNodeIds = topoSort(graph);
 
@@ -323,6 +329,50 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
           const chatData = await chatRes.json();
           outputs.output = chatData.choices?.[0]?.message?.content || '';
+          break;
+
+        case 'prompt_library':
+          const mode = node.data.mode || (inputs.prompt_id ? 'direct' : 'random');
+          let selectedPromptContent = '';
+          let selectedPreviewImg = '';
+
+          if (mode === 'direct') {
+            const promptId = inputs.prompt_id || node.data.prompt_id;
+            if (!promptId) throw new Error('prompt_library node missing prompt_id for direct mode');
+            
+            if (pool) {
+              const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE id = $1', [promptId]);
+              if (res.rows.length > 0) {
+                selectedPromptContent = res.rows[0].content;
+                selectedPreviewImg = res.rows[0].data?.preview_img || '';
+              } else {
+                throw new Error(`Prompt with ID ${promptId} not found in database.`);
+              }
+            } else {
+              throw new Error('Database pool not available for prompt_library node execution');
+            }
+          } else if (mode === 'random') {
+            const groupId = inputs.group_id || node.data.group_id;
+            if (!groupId) throw new Error('prompt_library node missing group_id for random mode');
+
+            if (pool) {
+              // Order by RANDOM() to pick one random prompt from the group
+              const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
+              if (res.rows.length > 0) {
+                selectedPromptContent = res.rows[0].content;
+                selectedPreviewImg = res.rows[0].data?.preview_img || '';
+              } else {
+                throw new Error(`No prompts found in group ${groupId}.`);
+              }
+            } else {
+              throw new Error('Database pool not available for prompt_library node execution');
+            }
+          } else {
+            throw new Error(`Unknown mode ${mode} for prompt_library node`);
+          }
+
+          outputs.output = selectedPromptContent;
+          outputs.preview_img = selectedPreviewImg;
           break;
 
         case 'image_preview':

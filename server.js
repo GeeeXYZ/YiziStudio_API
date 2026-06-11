@@ -648,6 +648,56 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
     await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "user_id" = $2 OR "phone_number" = $3', [nextPoints.toString(), unionid, unionid]);
 
     res.json({ msg: 'ok', result: { id: orderId } });
+
+    // 5) Auto Trigger API Pipeline if configured
+    const isAutoTrigger = skuData.auto_trigger === true || skuData.auto_trigger === 'true' || skuData.auto_trigger === 1 || skuData.auto_trigger === '1';
+    console.log(`[Auto Trigger Check] Order ${orderId} | auto_trigger=${skuData.auto_trigger} (resolved: ${isAutoTrigger}) | workflow=${skuData.workflow} | workflow_type=${skuData.workflow_type}`);
+    
+    if (isAutoTrigger && skuData.workflow && skuData.workflow_type === 'api_pipeline') {
+      try {
+        // yizi_cases primary key is `uuid`, NOT `id`
+        const caseRes = await pool.query('SELECT data FROM "yizi_cases" WHERE uuid = $1', [skuData.workflow]);
+        console.log(`[Auto Trigger] Queried yizi_cases for uuid=${skuData.workflow}, found ${caseRes.rows.length} rows`);
+        
+        if (caseRes.rows.length > 0) {
+          const workflowData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
+          
+          let resolvedPoseFolder = 'poses';
+          if (skuData.body_type === '半身') resolvedPoseFolder = 'half_poses';
+          if (skuData.body_type === '特殊') resolvedPoseFolder = 'special_poses';
+          if (skuData.pose_folder) resolvedPoseFolder = skuData.pose_folder; // Explicit override if set
+
+          if (Array.isArray(data.sets)) {
+            data.sets.forEach((set, index) => {
+              const orderContext = {
+                isRealOrder: true,
+                openid: unionid,
+                order_id: orderId,
+                set_index: index,
+                sku_pose_folder: resolvedPoseFolder,
+                model_uuid: data.model_uuid,
+                images: set.images || [],
+                prompt: set.extra_prompt || '',
+                model_name: data.model_name || ''
+              };
+              
+              // workflowData.workflow_json contains the node graph as a string
+              const pipelineInput = workflowData.workflow_json || workflowData;
+              console.log(`[Auto Trigger] Launching pipeline for Order ${orderId} Set ${index}, input type: ${typeof pipelineInput}`);
+              
+              runPipeline(pipelineInput, orderContext, pool).catch(err => {
+                console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err);
+              });
+            });
+          }
+        } else {
+          console.warn(`[Auto Trigger] No workflow found in yizi_cases for uuid=${skuData.workflow}`);
+        }
+      } catch (triggerErr) {
+        console.error('[Auto Trigger Pipeline Error]', triggerErr);
+      }
+    }
+
   } catch (error) {
     console.error('[Order Create Error]', error);
     res.json({ msg: 'err', info: error.message });
