@@ -116,11 +116,12 @@ async function executeGrsaiPreset(node, inputs, env) {
     replyType: 'async'
   };
 
-  console.log(`[Grsai Execute] Submitting task to ${generateUrl}...`);
+  console.log(`[Grsai Execute] Submitting task to ${generateUrl} with payload:`, JSON.stringify(payload));
   const res = await fetch(generateUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30000)
   });
 
   if (!res.ok) {
@@ -139,7 +140,8 @@ async function executeGrsaiPreset(node, inputs, env) {
   for (let i = 0; i < 60; i++) { // Max 60 * 3s = 180s
     await sleep(3000);
     const pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000)
     });
     
     if (!pollRes.ok) continue;
@@ -275,7 +277,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             body: JSON.stringify({
               model: llmModel,
               messages: [{ role: 'user', content: llmPrompt }]
-            })
+            }),
+            signal: AbortSignal.timeout(30000)
           });
 
           if (!chatRes.ok) {
