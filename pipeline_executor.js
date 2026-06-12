@@ -430,7 +430,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           outputs.output = inputs.image_url || inputs.output || node.data.preview_url || '';
           break;
 
-        case 'oss_output':
+        case 'oss_output': {
           // Normalize: accept images from any reasonable input key, and ensure array
           let rawImages = inputs.images || inputs.output_images || inputs.output || [];
           const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
@@ -438,6 +438,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           const orderInfo = inputs.order_info || orderContext;
           
           console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
+          console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
           
           if (!filteredImages.length) {
              console.log(`[Pipeline] OSS Output: No valid images to upload. Raw inputs.images=${JSON.stringify(inputs.images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`);
@@ -460,13 +461,13 @@ export async function runPipeline(workflowJson, orderContext, pool) {
              throw new Error('OSS configuration missing in backend .env');
           }
 
-          const client = new OSS(ossConfig);
+          const ossClient = new OSS(ossConfig);
           const uploadedUrls = [];
 
           for (let i = 0; i < filteredImages.length; i++) {
              console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
              const url = await uploadToOSS(
-               client, 
+               ossClient, 
                filteredImages[i], 
                orderInfo.openid, 
                orderInfo.order_id, 
@@ -476,6 +477,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
              // Ensure it's https
              const secureUrl = url.replace('http://', 'https://');
              uploadedUrls.push(secureUrl);
+             console.log(`[Pipeline] Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
           }
 
           outputs.uploaded_urls = uploadedUrls;
@@ -486,11 +488,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           // Without this, the last writer silently overwrites earlier sets' results.
           if (pool && orderContext.isRealOrder) {
             console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-            const client = await pool.connect();
+            const pgClient = await pool.connect();
             try {
-              await client.query('BEGIN');
+              await pgClient.query('BEGIN');
               // Lock this specific order row — other pipelines will wait here
-              const selectRes = await client.query(
+              const selectRes = await pgClient.query(
                 'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
                 [orderInfo.order_id]
               );
@@ -509,22 +511,25 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                   });
                 }
 
-                await client.query(
+                await pgClient.query(
                   'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
                   [JSON.stringify(orderData), '1', orderInfo.order_id]
                 );
               }
-              await client.query('COMMIT');
+              await pgClient.query('COMMIT');
               console.log(`[Pipeline] Successfully committed delivery for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
             } catch (txErr) {
-              await client.query('ROLLBACK');
+              await pgClient.query('ROLLBACK');
               console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
               throw txErr;
             } finally {
-              client.release();
+              pgClient.release();
             }
+          } else {
+            console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}`);
           }
           break;
+        }
 
         case 'http_request':
           // basic http request implementation
