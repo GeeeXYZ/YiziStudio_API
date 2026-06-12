@@ -176,8 +176,8 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   // Polling loop
   try {
     let consecutiveErrors = 0;
-    for (let i = 0; i < 300; i++) { // Max 300 * 5s = 1500s (25 minutes)
-      await sleep(5000);
+    for (let i = 0; i < 300; i++) { // Max 300 * 10s = 3000s (50 minutes)
+      await sleep(10000);
       
       let pollRes;
       try {
