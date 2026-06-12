@@ -110,10 +110,11 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
   const payload = {
-    model: node.data.model || 'gpt-image-2',
+    model: node.data.modelId || node.data.model || 'gpt-image-2',
     prompt: prompt,
     images: combined_images,
-    aspectRatio: node.data.resolution || '1024x1024',
+    aspectRatio: node.data.genSize || node.data.resolution || '1024x1024',
+    quality: node.data.genQuality || 'standard',
     replyType: 'async'
   };
 
