@@ -480,28 +480,47 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           outputs.uploaded_urls = uploadedUrls;
 
           // Finally, push to yizi_orders delivery pool if requested
+          // CRITICAL: Use transaction + row lock to prevent race condition
+          // when multiple pipelines for the same order finish concurrently.
+          // Without this, the last writer silently overwrites earlier sets' results.
           if (pool && orderContext.isRealOrder) {
-            console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id}`);
-            const selectRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [orderInfo.order_id]);
-            if (selectRes.rows.length > 0) {
-              const orderData = selectRes.rows[0].data || {};
-              if (!orderData.sets) orderData.sets = [{}];
-              const setIndex = orderInfo.set_index || 0;
-              if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-              if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
-              
-              for (const url of uploadedUrls) {
-                orderData.sets[setIndex].delivery_imgs.push({
-                  id: `del_${crypto.randomBytes(4).toString('hex')}`,
-                  img: url,
-                  confirmed_at: null
-                });
-              }
-
-              await pool.query(
-                'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
-                [JSON.stringify(orderData), '1', orderInfo.order_id]
+            console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+            const client = await pool.connect();
+            try {
+              await client.query('BEGIN');
+              // Lock this specific order row — other pipelines will wait here
+              const selectRes = await client.query(
+                'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
+                [orderInfo.order_id]
               );
+              if (selectRes.rows.length > 0) {
+                const orderData = selectRes.rows[0].data || {};
+                if (!orderData.sets) orderData.sets = [{}];
+                const setIndex = orderInfo.set_index || 0;
+                if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+                if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
+                
+                for (const url of uploadedUrls) {
+                  orderData.sets[setIndex].delivery_imgs.push({
+                    id: `del_${crypto.randomBytes(4).toString('hex')}`,
+                    img: url,
+                    confirmed_at: null
+                  });
+                }
+
+                await client.query(
+                  'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
+                  [JSON.stringify(orderData), '1', orderInfo.order_id]
+                );
+              }
+              await client.query('COMMIT');
+              console.log(`[Pipeline] Successfully committed delivery for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+            } catch (txErr) {
+              await client.query('ROLLBACK');
+              console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
+              throw txErr;
+            } finally {
+              client.release();
             }
           }
           break;
