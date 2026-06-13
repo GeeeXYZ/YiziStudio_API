@@ -15,7 +15,10 @@ orderEventEmitter.setMaxListeners(100);
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [/localhost/, /zeabur\.app$/, /yizistudio/],
+  credentials: true
+}));
 app.use(express.json());
 
 // Health check / status route
@@ -1595,7 +1598,7 @@ app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
 
 // GET /api_pipeline/logs
 // Fetch the latest 50 API execution logs
-app.get('/api_pipeline/logs', async (req, res) => {
+app.get('/api_pipeline/logs', authenticateToken, async (req, res) => {
   try {
     const query = 'SELECT * FROM yizi_api_logs ORDER BY created_at DESC LIMIT 50';
     const result = await pool.query(query);
@@ -1666,10 +1669,13 @@ app.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) => {
     if (uploadedUrls.length > 0) {
        let orderData = orderInfo.data || {};
        if (!orderData.sets) orderData.sets = [{}];
-       if (!orderData.sets[0].delivery_imgs) orderData.sets[0].delivery_imgs = [];
+       // Use set_index from the log's request body, or default to 0
+       const setIdx = parseInt(req.body.set_index) || 0;
+       if (!orderData.sets[setIdx]) orderData.sets[setIdx] = {};
+       if (!orderData.sets[setIdx].delivery_imgs) orderData.sets[setIdx].delivery_imgs = [];
        
        for (const url of uploadedUrls) {
-         orderData.sets[0].delivery_imgs.push({
+         orderData.sets[setIdx].delivery_imgs.push({
            id: `del_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
            img: url,
            confirmed_at: null

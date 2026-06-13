@@ -235,23 +235,6 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
     replyType: 'async'
   };
 
-  // Backwards compatibility for headless execution (e.g. Toolkit triggers)
-  // where old workflow JSON in DB still uses ratio strings for vip model
-  if (payload.model === 'gpt-image-2-vip' && /^\d+:\d+$/.test(payload.aspectRatio)) {
-    const ratio = payload.aspectRatio;
-    const q = payload.quality || '1K';
-    const fallbackMap = {
-      '1K': { '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280', '4:3': '1152x864', '3:4': '864x1152', '3:2': '1536x1024', '2:3': '1024x1536' },
-      '2K': { '1:1': '2048x2048', '16:9': '2048x1152', '9:16': '1152x2048', '4:3': '2304x1728', '3:4': '1728x2304', '3:2': '2048x1360', '2:3': '1360x2048' },
-      '4K': { '1:1': '2880x2880', '16:9': '3840x2160', '9:16': '2160x3840', '4:3': '3264x2448', '3:4': '2448x3264', '3:2': '3504x2336', '2:3': '2336x3504' }
-    };
-    if (fallbackMap[q] && fallbackMap[q][ratio]) {
-      payload.aspectRatio = fallbackMap[q][ratio];
-    } else {
-      payload.aspectRatio = fallbackMap['1K']['1:1'];
-    }
-  }
-
   // DB Logging: Insert BEFORE submitting to Grsai (so the log is visible even if function dies)
   const tempLogId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let logInserted = false;
@@ -424,7 +407,15 @@ export async function runPipeline(workflowJson, orderContext, pool) {
         // sourceHandle usually determines which output variable we are taking
         const val = sourceOutputs[edge.sourceHandle || 'output'];
         if (val !== undefined) {
-          inputs[edge.targetHandle || 'input'] = val;
+          const key = edge.targetHandle || 'input';
+          if (inputs[key] !== undefined) {
+            // Multiple edges target the same handle — merge into array
+            const existing = Array.isArray(inputs[key]) ? inputs[key] : [inputs[key]];
+            const incoming = Array.isArray(val) ? val : [val];
+            inputs[key] = [...existing, ...incoming];
+          } else {
+            inputs[key] = val;
+          }
         }
       }
 
@@ -487,8 +478,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             }
           }
 
-          // Also map generic 'output' for backward compatibility
-          outputs.output = outputs;
+          // Note: removed circular self-reference (outputs.output = outputs) that caused issues
           break;
 
         case 'preset_grsai':
@@ -593,7 +583,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
         case 'oss_output': {
           // Normalize: accept images from any reasonable input key, and ensure array
-          let rawImages = inputs.images || inputs.output_images || inputs.output || [];
+          // Use length check to avoid empty-array short-circuit ([] is truthy in JS)
+          let rawImages = (Array.isArray(inputs.images) && inputs.images.length > 0 ? inputs.images : null)
+            || (Array.isArray(inputs.output_images) && inputs.output_images.length > 0 ? inputs.output_images : null)
+            || inputs.output
+            || [];
           const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
           const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
           const orderInfo = inputs.order_info || orderContext;
@@ -602,8 +596,9 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
           
           if (!filteredImages.length) {
-             console.log(`[Pipeline] OSS Output: No valid images to upload. Raw inputs.images=${JSON.stringify(inputs.images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`);
-             break;
+             const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
+             console.error(`[Pipeline] OSS Output: No valid images to upload. ${debugInfo}`);
+             throw new Error(`OSS Output 节点未收到任何有效图片。请检查上游生图节点的连线是否正确。Debug: ${debugInfo}`);
           }
 
           if (!orderInfo || !orderInfo.openid || !orderInfo.order_id) {
@@ -695,7 +690,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
                 await pgClient.query(
                   'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
-                  [JSON.stringify(orderData), '1', orderInfo.order_id]
+                  [JSON.stringify(orderData), '0', orderInfo.order_id]
                 );
               }
               await pgClient.query('COMMIT');
