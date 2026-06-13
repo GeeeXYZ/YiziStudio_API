@@ -511,6 +511,13 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                   });
                 }
 
+                // Persist the randomly selected pose image so workspace can display it
+                const orderInputNode = Object.values(context).find(c => c.random_pose_image);
+                if (orderInputNode && orderInputNode.random_pose_image) {
+                  orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
+                  console.log(`[Pipeline] Saved usedPoseUrl for set ${setIndex}: ${orderInputNode.random_pose_image}`);
+                }
+
                 await pgClient.query(
                   'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
                   [JSON.stringify(orderData), '1', orderInfo.order_id]
