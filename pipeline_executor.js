@@ -302,10 +302,13 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       switch (node.type) {
         case 'toolkit_input':
           // Dedicated input node for Toolkit calls (decoupled from order logic)
+          const imgArray = orderContext.images || [];
+          const idx = parseInt(node.data?.image_index) || 0;
           outputs = {
-            images: orderContext.images || [],
+            images: imgArray,
             prompt: orderContext.prompt || '',
-            toolkit_user: orderContext.openid || 'unknown'
+            toolkit_user: orderContext.openid || 'unknown',
+            single_image: imgArray[idx] || ''
           };
           break;
 
