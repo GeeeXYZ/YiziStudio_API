@@ -250,22 +250,6 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
     replyType: 'async'
   };
 
-  // DB Logging: Insert BEFORE submitting to Grsai (so the log is visible even if function dies)
-  const tempLogId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  let logInserted = false;
-  if (pool && orderContext) {
-    try {
-      await pool.query(
-        `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
-         VALUES ($1, $2, $3, 'submitting', 0, NOW(), NOW())`,
-        [tempLogId, orderContext.order_id || 'unknown', payload.model]
-      );
-      logInserted = true;
-    } catch (err) {
-      console.warn(`[DB] Failed to insert initial log for Grsai task:`, err.message);
-    }
-  }
-
   console.log(`[Grsai Execute] Submitting task to ${generateUrl} with payload:`, JSON.stringify(payload));
   const res = await fetch(generateUrl, {
     method: 'POST',
@@ -276,31 +260,16 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
 
   if (!res.ok) {
     const errText = await res.text();
-    if (pool && logInserted) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [`API error: [${res.status}] ${errText}`, tempLogId]).catch(() => {});
-    }
     throw new Error(`Grsai API error: [${res.status}] ${errText}`);
   }
 
   const data = await res.json();
   if (!data.id) {
-    if (pool && logInserted) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'No task ID returned', updated_at = NOW() WHERE id = $1`, [tempLogId]).catch(() => {});
-    }
     throw new Error('Grsai API did not return a task ID');
   }
 
   const taskId = data.id;
   console.log(`[Grsai Execute] Task ID ${taskId} received. Polling results...`);
-
-  // Update log with real task ID
-  if (pool && logInserted) {
-    try {
-      await pool.query(`UPDATE yizi_api_logs SET id = $1, status = 'pending', updated_at = NOW() WHERE id = $2`, [taskId, tempLogId]);
-    } catch (err) {
-      console.warn(`[DB] Failed to update log ID from ${tempLogId} to ${taskId}:`, err.message);
-    }
-  }
 
   // Polling loop
   try {
@@ -347,45 +316,18 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
       if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
         console.log(`[Grsai Execute] Task ${taskId} succeeded!`);
         const urls = pollData.results.map(r => r.url);
-        
-        // DB Logging: Success — pass array directly, JSONB column handles it
-        if (pool && logInserted) {
-          pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, error_msg = '节点原始产出(尚未入库OSS)', updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
-        }
-
         return { output_images: urls, output: urls };
       } else if (pollData.status === 'failed') {
         const errorDetail = pollData.error || pollData.message || 'Task failed internally';
-        // DB Logging: Failed
-        if (pool && logInserted) {
-          pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [errorDetail, taskId]).catch(e => console.warn(e.message));
-        }
         throw new Error(`Grsai Task ${taskId} failed: ${errorDetail}`);
       } else {
         console.log(`[Grsai Execute] Task ${taskId} status: ${pollData.status} (${pollData.progress || 0}%)`);
-        
-        // DB Logging: Limit Progress spam
-        const now = Date.now();
-        const currentProgress = pollData.progress || 0;
-        if (pool && logInserted && (currentProgress !== lastLoggedProgress || now - lastLoggedTime > 30000)) {
-          lastLoggedProgress = currentProgress;
-          lastLoggedTime = now;
-          pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', currentProgress, taskId]).catch(e => console.warn(e.message));
-        }
       }
     }
 
-    // Timeout failure logging
-    if (pool && logInserted) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 3000s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
-    }
     throw new Error(`Grsai Task ${taskId} timed out after 3000s`);
     
   } catch (pipelineErr) {
-    // Catch-all: if ANY exception occurs during polling, ensure the log is marked failed
-    if (pool && logInserted) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [pipelineErr.message || 'Unknown error', taskId]).catch(e => console.warn(e.message));
-    }
     throw pipelineErr;
   }
 }
@@ -738,95 +680,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             outputs.uploaded_urls = uploadedUrls;
             outputs.failed_uploads = failedUploads;
 
-            // === DB WRITE: always commit whatever succeeded ===
-            if (uploadedUrls.length > 0 && pool && orderContext.isRealOrder) {
-              console.log(`[Pipeline] Updating yizi_orders (saving pose/errors only, skipping auto-delivery) for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-              const pgClient = await pool.connect();
-              try {
-                await pgClient.query('BEGIN');
-                const selectRes = await pgClient.query(
-                  'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
-                  [orderInfo.order_id]
-                );
-                if (selectRes.rows.length > 0) {
-                  const orderData = selectRes.rows[0].data || {};
-                  if (!orderData.sets) orderData.sets = [{}];
-                  const setIndex = orderInfo.set_index || 0;
-                  if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-                  
-                  // Note: We no longer auto-push to delivery_imgs. 
-                  // Images are uploaded to OSS and will appear in the workspace gallery instead.
-
-                  // Persist the randomly selected pose image so workspace can display it
-                  const orderInputNode = Object.values(context).find(c => c.random_pose_image);
-                  if (orderInputNode && orderInputNode.random_pose_image) {
-                    orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
-                    console.log(`[Pipeline] Saved usedPoseUrl for set ${setIndex}: ${orderInputNode.random_pose_image}`);
-                  }
-
-                  // Record any upload failures on the set for admin visibility
-                  if (failedUploads.length > 0) {
-                    orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
-                      source: f.sourceUrl?.substring(0, 200),
-                      error: f.error,
-                      time: new Date().toISOString()
-                    }));
-                  }
-
-                  await pgClient.query(
-                    'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
-                    [JSON.stringify(orderData), '0', orderInfo.order_id]
-                  );
-                }
-                await pgClient.query('COMMIT');
-                console.log(`[Pipeline] ✅ Committed ${uploadedUrls.length} images for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-              } catch (txErr) {
-                await pgClient.query('ROLLBACK');
-                console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
-                throw txErr;
-              } finally {
-                pgClient.release();
-              }
-            } else if (uploadedUrls.length === 0 && failedUploads.length > 0) {
-              console.error(`[Pipeline] ⚠️ ALL ${failedUploads.length} images failed to upload for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-              if (pool && orderContext.isRealOrder) {
-                try {
-                  const pgClient = await pool.connect();
-                  try {
-                    await pgClient.query('BEGIN');
-                    const selectRes = await pgClient.query(
-                      'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
-                      [orderInfo.order_id]
-                    );
-                    if (selectRes.rows.length > 0) {
-                      const orderData = selectRes.rows[0].data || {};
-                      if (!orderData.sets) orderData.sets = [{}];
-                      const setIndex = orderInfo.set_index || 0;
-                      if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-                      orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
-                        source: f.sourceUrl?.substring(0, 200),
-                        error: f.error,
-                        time: new Date().toISOString()
-                      }));
-                      await pgClient.query(
-                        'UPDATE "yizi_orders" SET data = $1 WHERE id = $2',
-                        [JSON.stringify(orderData), orderInfo.order_id]
-                      );
-                    }
-                    await pgClient.query('COMMIT');
-                  } catch (txErr) {
-                    await pgClient.query('ROLLBACK');
-                    console.error(`[Pipeline] Failed to write upload errors to DB:`, txErr.message);
-                  } finally {
-                    pgClient.release();
-                  }
-                } catch (connErr) {
-                  console.error(`[Pipeline] Failed to get DB connection for error logging:`, connErr.message);
-                }
-              }
-            } else {
-              console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}, uploadedCount=${uploadedUrls.length}`);
-            }
+            // Note: Database writing has been decoupled and moved to runPipeline end
             break;
           }
 
@@ -911,6 +765,75 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
     if (pool) {
       pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, error_msg = $2, updated_at = NOW() WHERE id = $3`, [JSON.stringify(imagesToSave), errorSuffix, pipelineLogId]).catch(e => console.warn(e.message));
+    }
+
+    // === DECOUPLED DB WRITE: order update & auto delivery ===
+    if (pool && orderContext.isRealOrder && orderContext.order_id) {
+       let allFailedUploads = [];
+       for (const out of Object.values(context)) {
+          if (out && out.failed_uploads && Array.isArray(out.failed_uploads)) {
+             allFailedUploads.push(...out.failed_uploads);
+          }
+       }
+       
+       if (finalOssImages.length > 0 || allFailedUploads.length > 0) {
+         try {
+           const pgClient = await pool.connect();
+           try {
+             await pgClient.query('BEGIN');
+             const selectRes = await pgClient.query('SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [orderContext.order_id]);
+             
+             if (selectRes.rows.length > 0) {
+               const orderData = selectRes.rows[0].data || {};
+               if (!orderData.sets) orderData.sets = [{}];
+               const setIndex = orderContext.set_index || 0;
+               if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+               
+               // Persist random pose image
+               const orderInputNode = Object.values(context).find(c => c.random_pose_image);
+               if (orderInputNode && orderInputNode.random_pose_image) {
+                 orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
+               }
+
+               // Record failed uploads
+               if (allFailedUploads.length > 0) {
+                 orderData.sets[setIndex].upload_errors = allFailedUploads.map(f => ({
+                   source: f.sourceUrl?.substring(0, 200),
+                   error: f.error,
+                   time: new Date().toISOString()
+                 }));
+               }
+
+               // === AUTO DELIVERY LOGIC ===
+               if (finalOssImages.length > 0 && orderContext.auto_delivery) {
+                 if (!orderData.sets[setIndex].delivery_imgs) {
+                   orderData.sets[setIndex].delivery_imgs = [];
+                 }
+                 for (const imgUrl of finalOssImages) {
+                   orderData.sets[setIndex].delivery_imgs.push({
+                     id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`,
+                     img: imgUrl
+                   });
+                 }
+                 console.log(`[Pipeline Auto-Delivery] Pushed ${finalOssImages.length} images to delivery pool for Order ${orderContext.order_id}`);
+               }
+
+               await pgClient.query(
+                 'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
+                 [JSON.stringify(orderData), '0', orderContext.order_id]
+               );
+             }
+             await pgClient.query('COMMIT');
+           } catch (txErr) {
+             await pgClient.query('ROLLBACK');
+             console.error(`[Pipeline] Transaction failed for Order ${orderContext.order_id}:`, txErr.message);
+           } finally {
+             pgClient.release();
+           }
+         } catch (connErr) {
+           console.error(`[Pipeline] Failed to connect to DB for final order update:`, connErr.message);
+         }
+       }
     }
 
     console.log(`[Pipeline] Execution completed successfully.`);
