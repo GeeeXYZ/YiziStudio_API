@@ -1,5 +1,6 @@
 import OSS from 'ali-oss';
 import crypto from 'crypto';
+import sharp from 'sharp';
 import { getSetting } from './config_manager.js';
 
 /**
@@ -148,12 +149,23 @@ async function executeSeedream(node, inputs, env, pool) {
       if (url.startsWith('data:image')) {
         base64Images.push(url);
       } else {
-        const resp = await fetch(url);
-        if (!resp.ok) continue;
-        const arrayBuffer = await resp.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const base64 = buffer.toString('base64');
-        base64Images.push(`data:image/png;base64,${base64}`);
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) continue;
+          const arrayBuffer = await resp.arrayBuffer();
+          let buffer = Buffer.from(arrayBuffer);
+          
+          // Pre-compress using sharp to avoid huge payloads (max 1536px, 85% JPEG)
+          buffer = await sharp(buffer)
+            .resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 85 })
+            .toBuffer();
+            
+          const base64 = buffer.toString('base64');
+          base64Images.push(`data:image/jpeg;base64,${base64}`);
+        } catch (imgErr) {
+          console.warn(`[Pipeline] Failed to process image ${url.substring(0, 100)} for Seedream:`, imgErr.message);
+        }
       }
     }
     if (base64Images.length > 0) {
@@ -246,11 +258,8 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
         [tempLogId, orderContext.order_id || 'unknown', payload.model]
       );
       logInserted = true;
-
-      // Lazy Cleanup: Delete logs older than 7 days
-      pool.query(`DELETE FROM yizi_api_logs WHERE created_at < NOW() - INTERVAL '7 days'`).catch(() => {});
     } catch (err) {
-      console.warn(`[DB] Failed to insert api log:`, err.message);
+      console.warn(`[DB] Failed to insert initial log for Grsai task:`, err.message);
     }
   }
 
@@ -293,8 +302,14 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   // Polling loop
   try {
     let consecutiveErrors = 0;
-    for (let i = 0; i < 300; i++) { // Max 300 * 10s = 3000s (50 minutes)
-      await sleep(10000);
+    const intervals = [3000, 3000, 3000, 3000, 3000, 5000, 5000, 5000, 5000, 10000];
+    let pollIdx = 0;
+    let lastLoggedProgress = -1;
+    let lastLoggedTime = 0;
+
+    for (let i = 0; i < 300; i++) { // Max ~3000s
+      const currentInterval = intervals[Math.min(pollIdx++, intervals.length - 1)];
+      await sleep(currentInterval);
       
       let pollRes;
       try {
@@ -312,6 +327,9 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
       }
       
       if (!pollRes.ok) {
+        if (pollRes.status === 401 || pollRes.status === 403) {
+          throw new Error(`Grsai API Authentication failed (${pollRes.status}), aborting poll.`);
+        }
         consecutiveErrors++;
         console.warn(`[Grsai Execute] Poll HTTP ${pollRes.status} (${consecutiveErrors})`);
         if (consecutiveErrors >= 10) {
@@ -342,9 +360,14 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
         throw new Error(`Grsai Task ${taskId} failed: ${errorDetail}`);
       } else {
         console.log(`[Grsai Execute] Task ${taskId} status: ${pollData.status} (${pollData.progress || 0}%)`);
-        // DB Logging: Progress
-        if (pool && logInserted) {
-          pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', pollData.progress || 0, taskId]).catch(e => console.warn(e.message));
+        
+        // DB Logging: Limit Progress spam
+        const now = Date.now();
+        const currentProgress = pollData.progress || 0;
+        if (pool && logInserted && (currentProgress !== lastLoggedProgress || now - lastLoggedTime > 30000)) {
+          lastLoggedProgress = currentProgress;
+          lastLoggedTime = now;
+          pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [pollData.status || 'processing', currentProgress, taskId]).catch(e => console.warn(e.message));
         }
       }
     }
@@ -535,7 +558,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                 model: llmModel,
                 messages: [{ role: 'user', content: llmPrompt }]
               }),
-              signal: AbortSignal.timeout(30000)
+              signal: AbortSignal.timeout(120000)
             });
 
             if (!chatRes.ok) {
@@ -636,24 +659,34 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             const uploadedUrls = [];
             const failedUploads = [];
 
-            // === DECOUPLED UPLOAD: each image independently tried ===
-            for (let i = 0; i < filteredImages.length; i++) {
+            // === PARALLEL UPLOAD ===
+            const uploadPromises = filteredImages.map(async (imgUrl, i) => {
               try {
                 console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
                 const url = await uploadToOSS(
                   ossClient, 
-                  filteredImages[i], 
+                  imgUrl, 
                   orderInfo.openid, 
                   orderInfo.order_id, 
                   orderInfo.set_index || 0,
-                  `del_${Date.now()}`
+                  `del_${Date.now()}_${i}` // Ensure unique suffix for parallel uploads
                 );
                 const secureUrl = url.replace('http://', 'https://');
-                uploadedUrls.push(secureUrl);
                 console.log(`[Pipeline] ✅ Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
+                return { success: true, url: secureUrl };
               } catch (uploadErr) {
                 console.error(`[Pipeline] ❌ Image ${i+1}/${filteredImages.length} failed after retries: ${uploadErr.message}`);
-                failedUploads.push({ index: i, sourceUrl: filteredImages[i], error: uploadErr.message });
+                return { success: false, index: i, sourceUrl: imgUrl, error: uploadErr.message };
+              }
+            });
+
+            const uploadResults = await Promise.all(uploadPromises);
+            
+            for (const res of uploadResults) {
+              if (res.success) {
+                uploadedUrls.push(res.url);
+              } else {
+                failedUploads.push(res);
               }
             }
 
@@ -777,17 +810,27 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             break;
         }
 
-        // Write outputs to shared context (safe: each node writes only its own key)
-        context[node.id] = outputs;
-        completedNodes++;
-        
-        if (pool && completedNodes < totalNodes) {
-           const progress = Math.floor((completedNodes / totalNodes) * 100);
-           pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
+        try {
+          // Write outputs to shared context (safe: each node writes only its own key)
+          context[node.id] = outputs;
+          completedNodes++;
+          
+          if (pool && completedNodes < totalNodes) {
+             const progress = Math.floor((completedNodes / totalNodes) * 100);
+             pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
+          }
+          
+          console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
+        } catch (postExecErr) {
+          throw postExecErr;
         }
-        
-        console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
-      })();
+      })().catch(err => {
+        // Append the node ID to the error message so it shows up in the DB logs
+        const errorMsg = `[节点 ${node.type}] ${err.message}`;
+        const newErr = new Error(errorMsg);
+        newErr.stack = err.stack;
+        throw newErr;
+      });
     }
 
     // Wait for ALL node promises to settle, then check for failures
