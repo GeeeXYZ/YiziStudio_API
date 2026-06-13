@@ -210,11 +210,36 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
     inputs.ref_images || node.data.ref_image || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
+  let finalModel = node.data.modelId || node.data.model || 'gpt-image-2';
+  let finalAspectRatio = node.data.genSize || node.data.resolution || '1024x1024';
+
+  if (finalModel === 'gpt-image-2-vip' && finalAspectRatio.includes(':')) {
+    const vipRatioMap = {
+      'auto': '1024x1024',
+      '1:1': '1024x1024',
+      '16:9': '1280x720',
+      '9:16': '720x1280',
+      '4:3': '1152x864',
+      '3:4': '864x1152',
+      '3:2': '1536x1024',
+      '2:3': '1024x1536',
+      '5:4': '1120x896',
+      '4:5': '896x1120',
+      '21:9': '1456x624',
+      '9:21': '624x1456',
+      '1:3': '688x2048',
+      '3:1': '2048x688',
+      '2:1': '1536x768',
+      '1:2': '768x1536'
+    };
+    finalAspectRatio = vipRatioMap[finalAspectRatio] || '1024x1024';
+  }
+
   const payload = {
-    model: node.data.modelId || node.data.model || 'gpt-image-2',
+    model: finalModel,
     prompt: prompt,
     images: combined_images,
-    aspectRatio: node.data.genSize || node.data.resolution || '1024x1024',
+    aspectRatio: finalAspectRatio,
     quality: node.data.genQuality || 'standard',
     replyType: 'async'
   };
