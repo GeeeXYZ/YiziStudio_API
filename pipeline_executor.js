@@ -96,6 +96,94 @@ async function uploadToOSS(ossClient, url, openid, order_id, set_index, filename
 }
 
 /**
+ * Executes a Seedream (Volcengine Ark) image generation
+ */
+async function executeSeedream(node, inputs, env) {
+  const prompt = inputs.prompt || node.data.prompt || '';
+  const endpointId = node.data.endpointId;
+  const sizePreset = node.data.size || '2k (Origin)';
+  let images = inputs.images || [];
+  
+  // if inputs.images is a single string, make it an array
+  if (typeof images === 'string') images = [images];
+
+  if (!endpointId) throw new Error('Seedream missing endpointId');
+  const apiKey = env.VOLCENGINE_API_KEY || env.SEEDREAM_API_KEY || process.env.VOLCENGINE_API_KEY;
+  if (!apiKey) throw new Error('VOLCENGINE_API_KEY environment variable is not set. Please set it in .env');
+
+  let apiSize = sizePreset;
+  if (sizePreset.includes('1k')) apiSize = '1k';
+  else if (sizePreset.includes('2k')) apiSize = '2k';
+  else if (sizePreset.includes('4k')) apiSize = '4k';
+  else {
+    const match = sizePreset.match(/^(\d+x\d+)/);
+    if (match) apiSize = match[1];
+  }
+
+  const payload = {
+    model: endpointId,
+    prompt: prompt,
+    size: apiSize,
+  };
+
+  if (images.length > 0) {
+    const base64Images = [];
+    for (const url of images) {
+      if (!url) continue;
+      if (url.startsWith('data:image')) {
+        base64Images.push(url);
+      } else {
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+        const arrayBuffer = await resp.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const base64 = buffer.toString('base64');
+        base64Images.push(`data:image/png;base64,${base64}`);
+      }
+    }
+    if (base64Images.length > 0) {
+      payload.image = base64Images;
+    }
+  }
+
+  console.log(`[Pipeline] Seedream executing... model: ${endpointId}, size: ${apiSize}`);
+  
+  const res = await fetch("https://ark.cn-beijing.volces.com/api/v3/images/generations", {
+    method: 'POST',
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(300000)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Volcengine API Error [${res.status}]: ${errText}`);
+  }
+
+  const data = await res.json();
+  const outputImages = [];
+  
+  if (data.data && data.data.length > 0) {
+    for (const item of data.data) {
+      if (item.url) {
+        outputImages.push(item.url);
+      } else if (item.b64_json) {
+        outputImages.push(`data:image/png;base64,${item.b64_json}`);
+      }
+    }
+  }
+
+  if (outputImages.length === 0) {
+    throw new Error('Seedream returned no images');
+  }
+
+  return { output: outputImages };
+}
+
+/**
  * Executes a single Grsai API Call with polling
  */
 async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
@@ -362,6 +450,10 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
         case 'preset_grsai':
           outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
+          break;
+
+        case 'seedream':
+          outputs = await executeSeedream(node, inputs, process.env);
           break;
 
         case 'text_input':
