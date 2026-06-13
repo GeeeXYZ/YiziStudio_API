@@ -300,6 +300,15 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       // Execute Node
       let outputs = {};
       switch (node.type) {
+        case 'toolkit_input':
+          // Dedicated input node for Toolkit calls (decoupled from order logic)
+          outputs = {
+            images: orderContext.images || [],
+            prompt: orderContext.prompt || '',
+            toolkit_user: orderContext.openid || 'unknown'
+          };
+          break;
+
         case 'order_input':
           // We map orderContext to outputs
           outputs = {
