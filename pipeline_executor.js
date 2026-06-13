@@ -1,5 +1,6 @@
 import OSS from 'ali-oss';
 import crypto from 'crypto';
+import { getSetting } from './config_manager.js';
 
 /**
  * Parses nodes and edges into an execution graph
@@ -97,17 +98,17 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
  * Executes a Seedream (Volcengine Ark) image generation
  */
 async function executeSeedream(node, inputs, env) {
+async function executeSeedream(node, inputs, env, pool) {
   const prompt = inputs.prompt || node.data.prompt || '';
-  const endpointId = node.data.endpointId;
+  const endpointId = node.data.endpoint_id || env.SEEDREAM_ENDPOINT_ID || 'ep-xxxx';
   const sizePreset = node.data.size || '2k (Origin)';
   let images = inputs.images || [];
   
   // if inputs.images is a single string, make it an array
   if (typeof images === 'string') images = [images];
 
-  if (!endpointId) throw new Error('Seedream missing endpointId');
-  const apiKey = env.VOLCENGINE_API_KEY || env.SEEDREAM_API_KEY || process.env.VOLCENGINE_API_KEY;
-  if (!apiKey) throw new Error('VOLCENGINE_API_KEY environment variable is not set. Please set it in .env');
+  const apiKey = env.VOLCENGINE_API_KEY || await getSetting(pool, 'VOLCENGINE_API_KEY');
+  if (!apiKey || apiKey === 'your-volcengine-api-key') throw new Error('VOLCENGINE_API_KEY environment variable is not set. Please set it in .env');
 
   let apiSize = sizePreset;
   if (sizePreset.includes('1k')) apiSize = '1k';
@@ -185,8 +186,8 @@ async function executeSeedream(node, inputs, env) {
  * Executes a single Grsai API Call with polling
  */
 async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
-  const endpoint = process.env.GRSAI_API_ENDPOINT || env.GRSAI_API_ENDPOINT;
-  const apiKey = process.env.GRSAI_API_KEY || env.GRSAI_API_KEY;
+  const endpoint = env.GRSAI_API_ENDPOINT || await getSetting(pool, 'GRSAI_API_ENDPOINT');
+  const apiKey = env.GRSAI_API_KEY || await getSetting(pool, 'GRSAI_API_KEY');
 
   if (!endpoint || !apiKey) {
     throw new Error('Grsai API Key or Endpoint not configured in .env');
@@ -462,7 +463,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           break;
 
         case 'seedream':
-          outputs = await executeSeedream(node, inputs, process.env);
+          outputs = await executeSeedream(node, inputs, process.env, pool);
           break;
 
         case 'text_input':

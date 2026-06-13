@@ -33,6 +33,15 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/yizi',
 });
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS yizi_settings (
+      key VARCHAR PRIMARY KEY,
+      value TEXT,
+      is_secret BOOLEAN DEFAULT false,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`).then(() => console.log('yizi_settings verified')).catch(e => console.error('DB Init Error:', e.message));
+
 // Middleware for auth
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -1687,11 +1696,12 @@ app.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) => {
 app.post('/toolkit/grsai', authenticateToken, async (req, res) => {
   const { images, prompt, model, aspectRatio, quality } = req.body;
 
-  const endpoint = process.env.GRSAI_API_ENDPOINT;
-  const apiKey = process.env.GRSAI_API_KEY;
+  const { getSetting } = await import('./config_manager.js');
+  const endpoint = process.env.GRSAI_API_ENDPOINT || await getSetting(pool, 'GRSAI_API_ENDPOINT');
+  const apiKey = process.env.GRSAI_API_KEY || await getSetting(pool, 'GRSAI_API_KEY');
 
   if (!endpoint || !apiKey) {
-    return res.json({ msg: 'err', info: 'Grsai API not configured on server' });
+    return res.json({ msg: 'err', info: 'Grsai API not configured in settings' });
   }
 
   let baseUrl = endpoint.trim();
@@ -1778,6 +1788,55 @@ app.post('/toolkit/grsai', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[Toolkit Grsai Error]', err);
     return res.json({ msg: 'err', info: err.message });
+  }
+});
+
+// GET /admin/settings
+app.get('/admin/settings', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT key, value, is_secret, updated_at FROM yizi_settings');
+    const settings = result.rows.map(row => {
+      // Mask secret values for frontend
+      if (row.is_secret && row.value) {
+        return { ...row, value: 'sk-****' + crypto.createHash('md5').update(row.value).digest('hex').substring(0, 4) };
+      }
+      return row;
+    });
+    res.json({ msg: 'ok', data: settings });
+  } catch (err) {
+    console.error(err);
+    res.json({ msg: 'err', info: err.message });
+  }
+});
+
+// POST /admin/settings
+app.post('/admin/settings', authenticateToken, async (req, res) => {
+  const { settings } = req.body; // Array of {key, value, is_secret}
+  if (!Array.isArray(settings)) return res.json({ msg: 'err', info: 'Invalid data' });
+
+  try {
+    const { encrypt } = await import('./config_manager.js');
+    for (const item of settings) {
+      // If it's a masked secret, it means user didn't change it, skip.
+      if (item.is_secret && typeof item.value === 'string' && item.value.startsWith('sk-****')) {
+        continue; 
+      }
+      
+      let finalValue = item.value;
+      if (item.is_secret && finalValue) {
+        finalValue = encrypt(finalValue);
+      }
+
+      await pool.query(`
+        INSERT INTO yizi_settings (key, value, is_secret, updated_at) 
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = $2, is_secret = $3, updated_at = NOW()
+      `, [item.key, finalValue, item.is_secret ? true : false]);
+    }
+    res.json({ msg: 'ok', info: 'Settings saved successfully' });
+  } catch (err) {
+    console.error(err);
+    res.json({ msg: 'err', info: err.message });
   }
 });
 
