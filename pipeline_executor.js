@@ -60,11 +60,9 @@ function topoSort(graph) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Helper to upload image buffer or url to OSS
- * - 60s download timeout to prevent hanging on slow CDN responses
- * - 3 retry attempts with exponential backoff for transient network errors
+ * Helper to download from a URL and upload directly to OSS with retry
  */
-async function uploadToOSS(ossClient, url, openid, order_id, set_index, filenamePrefix) {
+export async function uploadToOSS(ossClient, url, openid, order_id, set_index, filenamePrefix) {
   const MAX_RETRIES = 3;
   const DOWNLOAD_TIMEOUT_MS = 60000;
 
@@ -754,15 +752,31 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
     }
 
-    let finalImages = [];
+    let finalOssImages = [];
+    let rawGeneratedImages = [];
+
     for (const out of Object.values(context)) {
+      if (out && out.uploaded_urls && Array.isArray(out.uploaded_urls)) {
+         finalOssImages.push(...out.uploaded_urls);
+      }
       if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) {
-         finalImages.push(...out.final_image_urls);
+         finalOssImages.push(...out.final_image_urls);
+      }
+      if (out && out.output && Array.isArray(out.output)) {
+         rawGeneratedImages.push(...out.output.filter(u => typeof u === 'string' && u.startsWith('http')));
       }
     }
 
+    let isOssSuccess = finalOssImages.length > 0;
+    let imagesToSave = isOssSuccess ? finalOssImages : rawGeneratedImages;
+    let errorSuffix = '';
+    
+    if (!isOssSuccess && rawGeneratedImages.length > 0) {
+       errorSuffix = '注意: OSS上传失败或未执行，此为节点原始产出图';
+    }
+
     if (pool) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(finalImages), pipelineLogId]).catch(e => console.warn(e.message));
+      pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, error_msg = $2, updated_at = NOW() WHERE id = $3`, [JSON.stringify(imagesToSave), errorSuffix, pipelineLogId]).catch(e => console.warn(e.message));
     }
 
     console.log(`[Pipeline] Execution completed successfully.`);
