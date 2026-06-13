@@ -1609,8 +1609,34 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
 
 // API Pipeline Execution Endpoint (manual trigger from Dashboard)
 app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
-  const { workflow_json, mock_order } = req.body;
-  if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required' });
+  let { workflow_json, mock_order } = req.body;
+  
+  if (!workflow_json && mock_order?.order_id) {
+    try {
+      // Lookup the order's planId (SKU) to find the default workflow
+      const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [mock_order.order_id]);
+      if (orderRes.rows.length > 0) {
+        const orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+        if (orderData.planId) {
+          const skuRes = await pool.query('SELECT data FROM "yizi_sku" WHERE "uuid" = $1 OR "id" = $2', [orderData.planId, orderData.planId]);
+          if (skuRes.rows.length > 0) {
+            const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+            if (skuData.workflow) {
+              const caseRes = await pool.query('SELECT data FROM "yizi_cases" WHERE "uuid" = $1 OR "id" = $2', [skuData.workflow, skuData.workflow]);
+              if (caseRes.rows.length > 0) {
+                 const caseData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
+                 workflow_json = caseData.workflow_json || caseData;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[API Pipeline] Auto-resolve workflow error:', e.message);
+    }
+  }
+
+  if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required or could not be inferred from order.' });
   
   // Respond immediately, then await pipeline to keep function alive
   res.json({ msg: 'ok', info: 'Pipeline started' });
