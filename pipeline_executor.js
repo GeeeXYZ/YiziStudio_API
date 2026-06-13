@@ -61,23 +61,37 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Helper to upload image buffer or url to OSS
+ * - 60s download timeout to prevent hanging on slow CDN responses
+ * - 3 retry attempts with exponential backoff for transient network errors
  */
 async function uploadToOSS(ossClient, url, openid, order_id, set_index, filenamePrefix) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Failed to download image: ${response.statusText}`);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    
-    const ext = url.split('.').pop().split('?')[0].match(/^(jpg|jpeg|png|webp|gif)$/i) ? RegExp.$1 : 'png';
-    const filename = `${filenamePrefix}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
-    const ossPath = `delivery_imgs/${openid}/${order_id}/set${set_index}/${filename}`;
+  const MAX_RETRIES = 3;
+  const DOWNLOAD_TIMEOUT_MS = 60000;
 
-    const result = await ossClient.put(ossPath, buffer);
-    return result.url; // This is usually http... we should convert to https if needed
-  } catch (err) {
-    console.error(`[OSS Upload Error]`, err);
-    throw err;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const extMatch = url.split('.').pop().split('?')[0].match(/^(jpg|jpeg|png|webp|gif)$/i);
+      const ext = extMatch ? extMatch[1] : 'png';
+      const filename = `${filenamePrefix}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+      const ossPath = `delivery_imgs/${openid}/${order_id}/set${set_index}/${filename}`;
+
+      const result = await ossClient.put(ossPath, buffer);
+      return result.url;
+    } catch (err) {
+      console.warn(`[OSS Upload] Attempt ${attempt}/${MAX_RETRIES} failed for ${url.substring(0, 120)}: ${err.message}`);
+      if (attempt === MAX_RETRIES) {
+        console.error(`[OSS Upload] All ${MAX_RETRIES} attempts exhausted, giving up.`);
+        throw err;
+      }
+      await sleep(2000 * attempt); // exponential backoff: 2s, 4s, 6s
+    }
   }
 }
 
@@ -234,9 +248,9 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
 
     // Timeout failure logging
     if (pool && logInserted) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 1500s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = 'Polling timeout 3000s', updated_at = NOW() WHERE id = $1`, [taskId]).catch(e => console.warn(e.message));
     }
-    throw new Error(`Grsai Task ${taskId} timed out after 1500s`);
+    throw new Error(`Grsai Task ${taskId} timed out after 3000s`);
     
   } catch (pipelineErr) {
     // Catch-all: if ANY exception occurs during polling, ensure the log is marked failed
@@ -463,35 +477,40 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
           const ossClient = new OSS(ossConfig);
           const uploadedUrls = [];
+          const failedUploads = [];
 
+          // === DECOUPLED UPLOAD: each image independently tried ===
           for (let i = 0; i < filteredImages.length; i++) {
-             console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
-             const url = await uploadToOSS(
-               ossClient, 
-               filteredImages[i], 
-               orderInfo.openid, 
-               orderInfo.order_id, 
-               orderInfo.set_index || 0,
-               `del_${Date.now()}`
-             );
-             // Ensure it's https
-             const secureUrl = url.replace('http://', 'https://');
-             uploadedUrls.push(secureUrl);
-             console.log(`[Pipeline] Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
+            try {
+              console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
+              const url = await uploadToOSS(
+                ossClient, 
+                filteredImages[i], 
+                orderInfo.openid, 
+                orderInfo.order_id, 
+                orderInfo.set_index || 0,
+                `del_${Date.now()}`
+              );
+              const secureUrl = url.replace('http://', 'https://');
+              uploadedUrls.push(secureUrl);
+              console.log(`[Pipeline] ✅ Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
+            } catch (uploadErr) {
+              console.error(`[Pipeline] ❌ Image ${i+1}/${filteredImages.length} failed after retries: ${uploadErr.message}`);
+              failedUploads.push({ index: i, sourceUrl: filteredImages[i], error: uploadErr.message });
+              // Continue to next image — do NOT break the loop
+            }
           }
 
+          console.log(`[Pipeline] OSS Upload Summary: ${uploadedUrls.length} succeeded, ${failedUploads.length} failed out of ${filteredImages.length} total.`);
           outputs.uploaded_urls = uploadedUrls;
+          outputs.failed_uploads = failedUploads;
 
-          // Finally, push to yizi_orders delivery pool if requested
-          // CRITICAL: Use transaction + row lock to prevent race condition
-          // when multiple pipelines for the same order finish concurrently.
-          // Without this, the last writer silently overwrites earlier sets' results.
-          if (pool && orderContext.isRealOrder) {
+          // === DB WRITE: always commit whatever succeeded ===
+          if (uploadedUrls.length > 0 && pool && orderContext.isRealOrder) {
             console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
             const pgClient = await pool.connect();
             try {
               await pgClient.query('BEGIN');
-              // Lock this specific order row — other pipelines will wait here
               const selectRes = await pgClient.query(
                 'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
                 [orderInfo.order_id]
@@ -518,13 +537,22 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                   console.log(`[Pipeline] Saved usedPoseUrl for set ${setIndex}: ${orderInputNode.random_pose_image}`);
                 }
 
+                // Record any upload failures on the set for admin visibility
+                if (failedUploads.length > 0) {
+                  orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
+                    source: f.sourceUrl?.substring(0, 200),
+                    error: f.error,
+                    time: new Date().toISOString()
+                  }));
+                }
+
                 await pgClient.query(
                   'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
                   [JSON.stringify(orderData), '1', orderInfo.order_id]
                 );
               }
               await pgClient.query('COMMIT');
-              console.log(`[Pipeline] Successfully committed delivery for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+              console.log(`[Pipeline] ✅ Committed ${uploadedUrls.length} images for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
             } catch (txErr) {
               await pgClient.query('ROLLBACK');
               console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
@@ -532,8 +560,46 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             } finally {
               pgClient.release();
             }
+          } else if (uploadedUrls.length === 0 && failedUploads.length > 0) {
+            // ALL images failed — log to DB so admin can see the error
+            console.error(`[Pipeline] ⚠️ ALL ${failedUploads.length} images failed to upload for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+            if (pool && orderContext.isRealOrder) {
+              try {
+                const pgClient = await pool.connect();
+                try {
+                  await pgClient.query('BEGIN');
+                  const selectRes = await pgClient.query(
+                    'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
+                    [orderInfo.order_id]
+                  );
+                  if (selectRes.rows.length > 0) {
+                    const orderData = selectRes.rows[0].data || {};
+                    if (!orderData.sets) orderData.sets = [{}];
+                    const setIndex = orderInfo.set_index || 0;
+                    if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+                    orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
+                      source: f.sourceUrl?.substring(0, 200),
+                      error: f.error,
+                      time: new Date().toISOString()
+                    }));
+                    await pgClient.query(
+                      'UPDATE "yizi_orders" SET data = $1 WHERE id = $2',
+                      [JSON.stringify(orderData), orderInfo.order_id]
+                    );
+                  }
+                  await pgClient.query('COMMIT');
+                } catch (txErr) {
+                  await pgClient.query('ROLLBACK');
+                  console.error(`[Pipeline] Failed to write upload errors to DB:`, txErr.message);
+                } finally {
+                  pgClient.release();
+                }
+              } catch (connErr) {
+                console.error(`[Pipeline] Failed to get DB connection for error logging:`, connErr.message);
+              }
+            }
           } else {
-            console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}`);
+            console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}, uploadedCount=${uploadedUrls.length}`);
           }
           break;
         }
