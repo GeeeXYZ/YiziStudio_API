@@ -353,6 +353,7 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
  * Main execution function
  */
 export async function runPipeline(workflowJson, orderContext, pool) {
+  const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   try {
     const parsedData = typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson;
     const { nodes, edges } = parsedData;
@@ -361,13 +362,23 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       throw new Error("Invalid workflow data: Missing 'nodes' or 'edges' arrays");
     }
 
+    if (pool) {
+      await pool.query(
+        `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
+         VALUES ($1, $2, $3, 'processing', 0, NOW(), NOW())`,
+        [pipelineLogId, orderContext?.order_id || 'toolkit_run', 'API Workflow']
+      ).catch(e => console.warn('[Pipeline Log] Insert Error:', e.message));
+    }
+
     const graph = buildGraph(nodes, edges);
     const sortedNodeIds = topoSort(graph);
 
     // Node output context: nodeId -> { outputKey: value }
     const context = {};
+    const totalNodes = sortedNodeIds.length;
+    let completedNodes = 0;
 
-    console.log(`[Pipeline] Starting execution of ${sortedNodeIds.length} nodes...`);
+    console.log(`[Pipeline] Starting execution of ${totalNodes} nodes...`);
 
     for (const nodeId of sortedNodeIds) {
       const node = graph.nodes[nodeId];
@@ -733,13 +744,34 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       }
 
       context[node.id] = outputs;
+      completedNodes++;
+      
+      if (pool && completedNodes < totalNodes) {
+         const progress = Math.floor((completedNodes / totalNodes) * 100);
+         pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
+      }
+      
       console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
+    }
+
+    let finalImages = [];
+    for (const out of Object.values(context)) {
+      if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) {
+         finalImages.push(...out.final_image_urls);
+      }
+    }
+
+    if (pool) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(finalImages), pipelineLogId]).catch(e => console.warn(e.message));
     }
 
     console.log(`[Pipeline] Execution completed successfully.`);
     return { success: true, context };
 
   } catch (err) {
+    if (pool) {
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [err.message, pipelineLogId]).catch(() => {});
+    }
     console.error(`[Pipeline Error]`, err);
     return { success: false, error: err.message };
   }
