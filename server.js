@@ -822,6 +822,28 @@ app.post('/comfyui/order/get', authenticateToken, async (req, res) => {
   }
 });
 
+// 7.6 ComfyUI Dedicated API: STS token for ImagesUploader node
+app.post('/comfyui/order/sts', authenticateToken, async (req, res) => {
+  const { order_id } = req.body;
+  try {
+    // If order_id is provided (e.g. "openid.order_id"), scope the STS token
+    let openid = null;
+    let orderId = null;
+    if (order_id && order_id.includes('.')) {
+      const parts = order_id.split('.');
+      openid = parts[0];
+      orderId = parts.slice(1).join('.');
+    }
+    const token = await getOSSToken(openid, orderId);
+    // Add targetFolder for the ImagesUploader node to know where to upload
+    token.targetFolder = 'delivery_imgs';
+    res.json({ msg: 'ok', result: token });
+  } catch (error) {
+    console.error('[ComfyUI STS Error]', error);
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
 // 8. Submit feedback comment
 app.post('/client/order/comment', authenticateToken, async (req, res) => {
   const { id, index, delivery_index, comment } = req.body;

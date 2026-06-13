@@ -663,7 +663,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
             // === DB WRITE: always commit whatever succeeded ===
             if (uploadedUrls.length > 0 && pool && orderContext.isRealOrder) {
-              console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+              console.log(`[Pipeline] Updating yizi_orders (saving pose/errors only, skipping auto-delivery) for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
               const pgClient = await pool.connect();
               try {
                 await pgClient.query('BEGIN');
@@ -676,15 +676,9 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                   if (!orderData.sets) orderData.sets = [{}];
                   const setIndex = orderInfo.set_index || 0;
                   if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-                  if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
                   
-                  for (const url of uploadedUrls) {
-                    orderData.sets[setIndex].delivery_imgs.push({
-                      id: `del_${crypto.randomBytes(4).toString('hex')}`,
-                      img: url,
-                      confirmed_at: null
-                    });
-                  }
+                  // Note: We no longer auto-push to delivery_imgs. 
+                  // Images are uploaded to OSS and will appear in the workspace gallery instead.
 
                   // Persist the randomly selected pose image so workspace can display it
                   const orderInputNode = Object.values(context).find(c => c.random_pose_image);
