@@ -1528,7 +1528,11 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
 
         // --- OSS GC (Update Cleanup) ---
         try {
-          if (result.rows.length > 0) {
+          // Fix: Disable automatic OSS GC for yizi_orders on update.
+          // In the workspace, removing an image from the delivery slot (JSON) 
+          // should NOT physically delete the file from OSS, because it still 
+          // belongs to the global gallery pool. Explicit deletions use /admin/oss/delete.
+          if (result.rows.length > 0 && db_name !== 'yizi_orders') {
             const newKeys = extractOSSKeys(result.rows[0]);
             const keysToDelete = oldKeys.filter(k => !newKeys.includes(k));
             if (keysToDelete.length > 0) {
