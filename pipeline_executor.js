@@ -388,397 +388,421 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     const graph = buildGraph(nodes, edges);
     const sortedNodeIds = topoSort(graph);
 
+
     // Node output context: nodeId -> { outputKey: value }
     const context = {};
     const totalNodes = sortedNodeIds.length;
     let completedNodes = 0;
 
-    console.log(`[Pipeline] Starting execution of ${totalNodes} nodes...`);
+    console.log(`[Pipeline] Starting CONCURRENT execution of ${totalNodes} nodes...`);
+
+    // === DATAFLOW CONCURRENCY ===
+    // Each node gets its own Promise. Before executing, it awaits only its direct
+    // upstream dependencies. Nodes without mutual dependencies run in parallel.
+    const nodePromises = {};
 
     for (const nodeId of sortedNodeIds) {
       const node = graph.nodes[nodeId];
-      console.log(`[Pipeline] Executing node: ${node.type} (${node.id})`);
+      const incomingEdges = graph.inEdges[nodeId] || [];
 
-      // Resolve inputs based on incoming edges
-      const inputs = {};
-      const incoming = graph.inEdges[nodeId];
-      for (const edge of incoming) {
-        const sourceOutputs = context[edge.source] || {};
-        // sourceHandle usually determines which output variable we are taking
-        const val = sourceOutputs[edge.sourceHandle || 'output'];
-        if (val !== undefined) {
-          const key = edge.targetHandle || 'input';
-          if (inputs[key] !== undefined) {
-            // Multiple edges target the same handle — merge into array
-            const existing = Array.isArray(inputs[key]) ? inputs[key] : [inputs[key]];
-            const incoming = Array.isArray(val) ? val : [val];
-            inputs[key] = [...existing, ...incoming];
-          } else {
-            inputs[key] = val;
+      // Collect unique upstream node IDs this node depends on
+      const depNodeIds = [...new Set(incomingEdges.map(e => e.source))];
+
+      nodePromises[nodeId] = (async () => {
+        // Wait for all direct dependencies to finish
+        if (depNodeIds.length > 0) {
+          const depPromises = depNodeIds.map(dep => nodePromises[dep]).filter(Boolean);
+          await Promise.all(depPromises);
+        }
+
+        console.log(`[Pipeline] Executing node: ${node.type} (${node.id})`);
+
+        // Resolve inputs based on incoming edges (deps are guaranteed complete)
+        const inputs = {};
+        for (const edge of incomingEdges) {
+          const sourceOutputs = context[edge.source] || {};
+          const val = sourceOutputs[edge.sourceHandle || 'output'];
+          if (val !== undefined) {
+            const key = edge.targetHandle || 'input';
+            if (inputs[key] !== undefined) {
+              // Multiple edges target the same handle — merge into array
+              const existing = Array.isArray(inputs[key]) ? inputs[key] : [inputs[key]];
+              const incomingVal = Array.isArray(val) ? val : [val];
+              inputs[key] = [...existing, ...incomingVal];
+            } else {
+              inputs[key] = val;
+            }
           }
         }
-      }
 
-      // Execute Node
-      let outputs = {};
-      switch (node.type) {
-        case 'toolkit_input':
-          // Dedicated input node for Toolkit calls (decoupled from order logic)
-          const imgArray = orderContext.toolkit_images || [];
-          const idx = parseInt(node.data?.image_index) || 0;
-          outputs = {
-            images: imgArray,
-            prompt: orderContext.toolkit_prompt || '',
-            toolkit_user: orderContext.openid || 'unknown',
-            single_image: imgArray[idx] || ''
-          };
-          break;
-
-        case 'order_input':
-          // We map orderContext to outputs
-          outputs = {
-            user_prompt: orderContext.prompt || '',
-            user_images: orderContext.images || [],
-            order_info: {
-              openid: orderContext.openid,
-              order_id: orderContext.order_id,
-              set_index: orderContext.set_index || 0
-            },
-            model_name: orderContext.model_name || '',
-            model_uuid: orderContext.model_uuid || ''
-          };
-          
-          // Random Pose Image Fetching
-          outputs.random_pose_image = '';
-          if (outputs.model_uuid) {
-            try {
-              const ossClient = new OSS({
-                region: process.env.OSS_REGION,
-                accessKeyId: process.env.OSS_ACCESS_KEY_ID,
-                accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
-                bucket: process.env.OSS_BUCKET
-              });
-              const poseFolder = orderContext.sku_pose_folder || 'poses';
-              const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
-              
-              const result = await ossClient.list({ prefix, 'max-keys': 100 });
-              if (result.objects && result.objects.length > 0) {
-                // filter out directory itself if returned
-                const files = result.objects.filter(obj => !obj.name.endsWith('/'));
-                if (files.length > 0) {
-                  const randomFile = files[Math.floor(Math.random() * files.length)];
-                  outputs.random_pose_image = randomFile.url;
-                  console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
-                }
-              } else {
-                console.warn(`[Pipeline] No pose images found for model ${outputs.model_uuid} in folder ${poseFolder}`);
-              }
-            } catch (err) {
-              console.warn(`[Pipeline] Failed to fetch random pose from OSS for model ${outputs.model_uuid}:`, err.message);
-            }
+        // Execute Node
+        let outputs = {};
+        switch (node.type) {
+          case 'toolkit_input': {
+            const imgArray = orderContext.toolkit_images || [];
+            const idx = parseInt(node.data?.image_index) || 0;
+            outputs = {
+              images: imgArray,
+              prompt: orderContext.toolkit_prompt || '',
+              toolkit_user: orderContext.openid || 'unknown',
+              single_image: imgArray[idx] || ''
+            };
+            break;
           }
 
-          // Note: removed circular self-reference (outputs.output = outputs) that caused issues
-          break;
-
-        case 'preset_grsai':
-          outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
-          break;
-
-        case 'seedream':
-          outputs = await executeSeedream(node, inputs, process.env, pool);
-          break;
-
-        case 'text_input':
-          outputs.output = node.data.text || '';
-          break;
-
-        case 'string_concat':
-          const s1 = inputs.str1 || '';
-          const s2 = inputs.str2 || '';
-          const s3 = inputs.str3 || '';
-          const s4 = inputs.str4 || '';
-          // filter out empty strings and join with newline
-          outputs.output = [s1, s2, s3, s4].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
-          break;
-
-        case 'llm_call':
-          const llmUrl = node.data.api_url || 'https://api.openai.com/v1';
-          const llmKey = node.data.api_key || '';
-          const llmModel = node.data.model_name || 'gpt-3.5-turbo';
-          const llmPrompt = inputs.prompt || '';
-          
-          if (!llmKey) throw new Error(`LLM Node missing API Key`);
-
-          console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions`);
-          const chatRes = await fetch(`${llmUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${llmKey}`
-            },
-            body: JSON.stringify({
-              model: llmModel,
-              messages: [{ role: 'user', content: llmPrompt }]
-            }),
-            signal: AbortSignal.timeout(30000)
-          });
-
-          if (!chatRes.ok) {
-            throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
-          }
-
-          const chatData = await chatRes.json();
-          outputs.output = chatData.choices?.[0]?.message?.content || '';
-          break;
-
-        case 'prompt_library':
-          const mode = node.data.mode || (inputs.prompt_id ? 'direct' : 'random');
-          let selectedPromptContent = '';
-          let selectedPreviewImg = '';
-
-          if (mode === 'direct') {
-            const promptId = inputs.prompt_id || node.data.prompt_id;
-            if (!promptId) throw new Error('prompt_library node missing prompt_id for direct mode');
+          case 'order_input':
+            outputs = {
+              user_prompt: orderContext.prompt || '',
+              user_images: orderContext.images || [],
+              order_info: {
+                openid: orderContext.openid,
+                order_id: orderContext.order_id,
+                set_index: orderContext.set_index || 0
+              },
+              model_name: orderContext.model_name || '',
+              model_uuid: orderContext.model_uuid || ''
+            };
             
-            if (pool) {
-              const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE id = $1', [promptId]);
-              if (res.rows.length > 0) {
-                selectedPromptContent = res.rows[0].content;
-                selectedPreviewImg = res.rows[0].data?.preview_img || '';
-              } else {
-                throw new Error(`Prompt with ID ${promptId} not found in database.`);
-              }
-            } else {
-              throw new Error('Database pool not available for prompt_library node execution');
-            }
-          } else if (mode === 'random') {
-            const groupId = inputs.group_id || node.data.group_id;
-            if (!groupId) throw new Error('prompt_library node missing group_id for random mode');
-
-            if (pool) {
-              // Order by RANDOM() to pick one random prompt from the group
-              const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
-              if (res.rows.length > 0) {
-                selectedPromptContent = res.rows[0].content;
-                selectedPreviewImg = res.rows[0].data?.preview_img || '';
-              } else {
-                throw new Error(`No prompts found in group ${groupId}.`);
-              }
-            } else {
-              throw new Error('Database pool not available for prompt_library node execution');
-            }
-          } else {
-            throw new Error(`Unknown mode ${mode} for prompt_library node`);
-          }
-
-          outputs.output = selectedPromptContent;
-          outputs.preview_img = selectedPreviewImg;
-          break;
-
-        case 'image_preview':
-          // Passthrough the image url
-          outputs.output = inputs.image_url || inputs.output || node.data.preview_url || '';
-          break;
-
-        case 'oss_output': {
-          // Normalize: accept images from any reasonable input key, and ensure array
-          // Use length check to avoid empty-array short-circuit ([] is truthy in JS)
-          let rawImages = (Array.isArray(inputs.images) && inputs.images.length > 0 ? inputs.images : null)
-            || (Array.isArray(inputs.output_images) && inputs.output_images.length > 0 ? inputs.output_images : null)
-            || inputs.output
-            || [];
-          const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
-          const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
-          const orderInfo = inputs.order_info || orderContext;
-          
-          console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
-          console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
-          
-          if (!filteredImages.length) {
-             const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
-             console.error(`[Pipeline] OSS Output: No valid images to upload. ${debugInfo}`);
-             throw new Error(`OSS Output 节点未收到任何有效图片。请检查上游生图节点的连线是否正确。Debug: ${debugInfo}`);
-          }
-
-          if (!orderInfo || !orderInfo.openid || !orderInfo.order_id) {
-             throw new Error(`OSS Output Node missing valid order_info (openid, order_id)`);
-          }
-
-          const ossConfig = {
-            region: process.env.OSS_REGION,
-            accessKeyId: process.env.OSS_ACCESS_KEY_ID,
-            accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
-            bucket: process.env.OSS_BUCKET,
-            secure: true
-          };
-
-          if (!ossConfig.accessKeyId) {
-             throw new Error('OSS configuration missing in backend .env');
-          }
-
-          const ossClient = new OSS(ossConfig);
-          const uploadedUrls = [];
-          const failedUploads = [];
-
-          // === DECOUPLED UPLOAD: each image independently tried ===
-          for (let i = 0; i < filteredImages.length; i++) {
-            try {
-              console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
-              const url = await uploadToOSS(
-                ossClient, 
-                filteredImages[i], 
-                orderInfo.openid, 
-                orderInfo.order_id, 
-                orderInfo.set_index || 0,
-                `del_${Date.now()}`
-              );
-              const secureUrl = url.replace('http://', 'https://');
-              uploadedUrls.push(secureUrl);
-              console.log(`[Pipeline] ✅ Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
-            } catch (uploadErr) {
-              console.error(`[Pipeline] ❌ Image ${i+1}/${filteredImages.length} failed after retries: ${uploadErr.message}`);
-              failedUploads.push({ index: i, sourceUrl: filteredImages[i], error: uploadErr.message });
-              // Continue to next image — do NOT break the loop
-            }
-          }
-
-          console.log(`[Pipeline] OSS Upload Summary: ${uploadedUrls.length} succeeded, ${failedUploads.length} failed out of ${filteredImages.length} total.`);
-          outputs.uploaded_urls = uploadedUrls;
-          outputs.failed_uploads = failedUploads;
-
-          // === DB WRITE: always commit whatever succeeded ===
-          if (uploadedUrls.length > 0 && pool && orderContext.isRealOrder) {
-            console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-            const pgClient = await pool.connect();
-            try {
-              await pgClient.query('BEGIN');
-              const selectRes = await pgClient.query(
-                'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
-                [orderInfo.order_id]
-              );
-              if (selectRes.rows.length > 0) {
-                const orderData = selectRes.rows[0].data || {};
-                if (!orderData.sets) orderData.sets = [{}];
-                const setIndex = orderInfo.set_index || 0;
-                if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-                if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
-                
-                for (const url of uploadedUrls) {
-                  orderData.sets[setIndex].delivery_imgs.push({
-                    id: `del_${crypto.randomBytes(4).toString('hex')}`,
-                    img: url,
-                    confirmed_at: null
-                  });
-                }
-
-                // Persist the randomly selected pose image so workspace can display it
-                const orderInputNode = Object.values(context).find(c => c.random_pose_image);
-                if (orderInputNode && orderInputNode.random_pose_image) {
-                  orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
-                  console.log(`[Pipeline] Saved usedPoseUrl for set ${setIndex}: ${orderInputNode.random_pose_image}`);
-                }
-
-                // Record any upload failures on the set for admin visibility
-                if (failedUploads.length > 0) {
-                  orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
-                    source: f.sourceUrl?.substring(0, 200),
-                    error: f.error,
-                    time: new Date().toISOString()
-                  }));
-                }
-
-                await pgClient.query(
-                  'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
-                  [JSON.stringify(orderData), '0', orderInfo.order_id]
-                );
-              }
-              await pgClient.query('COMMIT');
-              console.log(`[Pipeline] ✅ Committed ${uploadedUrls.length} images for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-            } catch (txErr) {
-              await pgClient.query('ROLLBACK');
-              console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
-              throw txErr;
-            } finally {
-              pgClient.release();
-            }
-          } else if (uploadedUrls.length === 0 && failedUploads.length > 0) {
-            // ALL images failed — log to DB so admin can see the error
-            console.error(`[Pipeline] ⚠️ ALL ${failedUploads.length} images failed to upload for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
-            if (pool && orderContext.isRealOrder) {
+            // Random Pose Image Fetching
+            outputs.random_pose_image = '';
+            if (outputs.model_uuid) {
               try {
-                const pgClient = await pool.connect();
-                try {
-                  await pgClient.query('BEGIN');
-                  const selectRes = await pgClient.query(
-                    'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
-                    [orderInfo.order_id]
-                  );
-                  if (selectRes.rows.length > 0) {
-                    const orderData = selectRes.rows[0].data || {};
-                    if (!orderData.sets) orderData.sets = [{}];
-                    const setIndex = orderInfo.set_index || 0;
-                    if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+                const ossClient = new OSS({
+                  region: process.env.OSS_REGION,
+                  accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+                  accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+                  bucket: process.env.OSS_BUCKET
+                });
+                const poseFolder = orderContext.sku_pose_folder || 'poses';
+                const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
+                
+                const result = await ossClient.list({ prefix, 'max-keys': 100 });
+                if (result.objects && result.objects.length > 0) {
+                  const files = result.objects.filter(obj => !obj.name.endsWith('/'));
+                  if (files.length > 0) {
+                    const randomFile = files[Math.floor(Math.random() * files.length)];
+                    outputs.random_pose_image = randomFile.url;
+                    console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
+                  }
+                } else {
+                  console.warn(`[Pipeline] No pose images found for model ${outputs.model_uuid} in folder ${poseFolder}`);
+                }
+              } catch (err) {
+                console.warn(`[Pipeline] Failed to fetch random pose from OSS for model ${outputs.model_uuid}:`, err.message);
+              }
+            }
+
+            // Note: removed circular self-reference (outputs.output = outputs) that caused issues
+            break;
+
+          case 'preset_grsai':
+            outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
+            break;
+
+          case 'seedream':
+            outputs = await executeSeedream(node, inputs, process.env, pool);
+            break;
+
+          case 'text_input':
+            outputs.output = node.data.text || '';
+            break;
+
+          case 'string_concat': {
+            const s1 = inputs.str1 || '';
+            const s2 = inputs.str2 || '';
+            const s3 = inputs.str3 || '';
+            const s4 = inputs.str4 || '';
+            outputs.output = [s1, s2, s3, s4].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
+            break;
+          }
+
+          case 'llm_call': {
+            const llmUrl = node.data.api_url || 'https://api.openai.com/v1';
+            const llmKey = node.data.api_key || '';
+            const llmModel = node.data.model_name || 'gpt-3.5-turbo';
+            const llmPrompt = inputs.prompt || '';
+            
+            if (!llmKey) throw new Error(`LLM Node missing API Key`);
+
+            console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions`);
+            const chatRes = await fetch(`${llmUrl}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${llmKey}`
+              },
+              body: JSON.stringify({
+                model: llmModel,
+                messages: [{ role: 'user', content: llmPrompt }]
+              }),
+              signal: AbortSignal.timeout(30000)
+            });
+
+            if (!chatRes.ok) {
+              throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
+            }
+
+            const chatData = await chatRes.json();
+            outputs.output = chatData.choices?.[0]?.message?.content || '';
+            break;
+          }
+
+          case 'prompt_library': {
+            const mode = node.data.mode || (inputs.prompt_id ? 'direct' : 'random');
+            let selectedPromptContent = '';
+            let selectedPreviewImg = '';
+
+            if (mode === 'direct') {
+              const promptId = inputs.prompt_id || node.data.prompt_id;
+              if (!promptId) throw new Error('prompt_library node missing prompt_id for direct mode');
+              
+              if (pool) {
+                const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE id = $1', [promptId]);
+                if (res.rows.length > 0) {
+                  selectedPromptContent = res.rows[0].content;
+                  selectedPreviewImg = res.rows[0].data?.preview_img || '';
+                } else {
+                  throw new Error(`Prompt with ID ${promptId} not found in database.`);
+                }
+              } else {
+                throw new Error('Database pool not available for prompt_library node execution');
+              }
+            } else if (mode === 'random') {
+              const groupId = inputs.group_id || node.data.group_id;
+              if (!groupId) throw new Error('prompt_library node missing group_id for random mode');
+
+              if (pool) {
+                const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
+                if (res.rows.length > 0) {
+                  selectedPromptContent = res.rows[0].content;
+                  selectedPreviewImg = res.rows[0].data?.preview_img || '';
+                } else {
+                  throw new Error(`No prompts found in group ${groupId}.`);
+                }
+              } else {
+                throw new Error('Database pool not available for prompt_library node execution');
+              }
+            } else {
+              throw new Error(`Unknown mode ${mode} for prompt_library node`);
+            }
+
+            outputs.output = selectedPromptContent;
+            outputs.preview_img = selectedPreviewImg;
+            break;
+          }
+
+          case 'image_preview':
+            // Passthrough the image url
+            outputs.output = inputs.image_url || inputs.output || node.data.preview_url || '';
+            break;
+
+          case 'oss_output': {
+            // Normalize: accept images from any reasonable input key, and ensure array
+            // Use length check to avoid empty-array short-circuit ([] is truthy in JS)
+            let rawImages = (Array.isArray(inputs.images) && inputs.images.length > 0 ? inputs.images : null)
+              || (Array.isArray(inputs.output_images) && inputs.output_images.length > 0 ? inputs.output_images : null)
+              || inputs.output
+              || [];
+            const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
+            const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
+            const orderInfo = inputs.order_info || orderContext;
+            
+            console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
+            console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
+            
+            if (!filteredImages.length) {
+               const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
+               console.error(`[Pipeline] OSS Output: No valid images to upload. ${debugInfo}`);
+               throw new Error(`OSS Output 节点未收到任何有效图片。请检查上游生图节点的连线是否正确。Debug: ${debugInfo}`);
+            }
+
+            if (!orderInfo || !orderInfo.openid || !orderInfo.order_id) {
+               throw new Error(`OSS Output Node missing valid order_info (openid, order_id)`);
+            }
+
+            const ossConfig = {
+              region: process.env.OSS_REGION,
+              accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+              accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+              bucket: process.env.OSS_BUCKET,
+              secure: true
+            };
+
+            if (!ossConfig.accessKeyId) {
+               throw new Error('OSS configuration missing in backend .env');
+            }
+
+            const ossClient = new OSS(ossConfig);
+            const uploadedUrls = [];
+            const failedUploads = [];
+
+            // === DECOUPLED UPLOAD: each image independently tried ===
+            for (let i = 0; i < filteredImages.length; i++) {
+              try {
+                console.log(`[Pipeline] Uploading image ${i+1}/${filteredImages.length} to OSS...`);
+                const url = await uploadToOSS(
+                  ossClient, 
+                  filteredImages[i], 
+                  orderInfo.openid, 
+                  orderInfo.order_id, 
+                  orderInfo.set_index || 0,
+                  `del_${Date.now()}`
+                );
+                const secureUrl = url.replace('http://', 'https://');
+                uploadedUrls.push(secureUrl);
+                console.log(`[Pipeline] ✅ Uploaded ${i+1}/${filteredImages.length}: ${secureUrl}`);
+              } catch (uploadErr) {
+                console.error(`[Pipeline] ❌ Image ${i+1}/${filteredImages.length} failed after retries: ${uploadErr.message}`);
+                failedUploads.push({ index: i, sourceUrl: filteredImages[i], error: uploadErr.message });
+              }
+            }
+
+            console.log(`[Pipeline] OSS Upload Summary: ${uploadedUrls.length} succeeded, ${failedUploads.length} failed out of ${filteredImages.length} total.`);
+            outputs.uploaded_urls = uploadedUrls;
+            outputs.failed_uploads = failedUploads;
+
+            // === DB WRITE: always commit whatever succeeded ===
+            if (uploadedUrls.length > 0 && pool && orderContext.isRealOrder) {
+              console.log(`[Pipeline] Updating yizi_orders Delivery Pool for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+              const pgClient = await pool.connect();
+              try {
+                await pgClient.query('BEGIN');
+                const selectRes = await pgClient.query(
+                  'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
+                  [orderInfo.order_id]
+                );
+                if (selectRes.rows.length > 0) {
+                  const orderData = selectRes.rows[0].data || {};
+                  if (!orderData.sets) orderData.sets = [{}];
+                  const setIndex = orderInfo.set_index || 0;
+                  if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+                  if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
+                  
+                  for (const url of uploadedUrls) {
+                    orderData.sets[setIndex].delivery_imgs.push({
+                      id: `del_${crypto.randomBytes(4).toString('hex')}`,
+                      img: url,
+                      confirmed_at: null
+                    });
+                  }
+
+                  // Persist the randomly selected pose image so workspace can display it
+                  const orderInputNode = Object.values(context).find(c => c.random_pose_image);
+                  if (orderInputNode && orderInputNode.random_pose_image) {
+                    orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
+                    console.log(`[Pipeline] Saved usedPoseUrl for set ${setIndex}: ${orderInputNode.random_pose_image}`);
+                  }
+
+                  // Record any upload failures on the set for admin visibility
+                  if (failedUploads.length > 0) {
                     orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
                       source: f.sourceUrl?.substring(0, 200),
                       error: f.error,
                       time: new Date().toISOString()
                     }));
-                    await pgClient.query(
-                      'UPDATE "yizi_orders" SET data = $1 WHERE id = $2',
-                      [JSON.stringify(orderData), orderInfo.order_id]
-                    );
                   }
-                  await pgClient.query('COMMIT');
-                } catch (txErr) {
-                  await pgClient.query('ROLLBACK');
-                  console.error(`[Pipeline] Failed to write upload errors to DB:`, txErr.message);
-                } finally {
-                  pgClient.release();
+
+                  await pgClient.query(
+                    'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
+                    [JSON.stringify(orderData), '0', orderInfo.order_id]
+                  );
                 }
-              } catch (connErr) {
-                console.error(`[Pipeline] Failed to get DB connection for error logging:`, connErr.message);
+                await pgClient.query('COMMIT');
+                console.log(`[Pipeline] ✅ Committed ${uploadedUrls.length} images for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+              } catch (txErr) {
+                await pgClient.query('ROLLBACK');
+                console.error(`[Pipeline] Transaction failed for Order ${orderInfo.order_id}:`, txErr.message);
+                throw txErr;
+              } finally {
+                pgClient.release();
               }
+            } else if (uploadedUrls.length === 0 && failedUploads.length > 0) {
+              console.error(`[Pipeline] ⚠️ ALL ${failedUploads.length} images failed to upload for Order ${orderInfo.order_id} Set ${orderInfo.set_index || 0}`);
+              if (pool && orderContext.isRealOrder) {
+                try {
+                  const pgClient = await pool.connect();
+                  try {
+                    await pgClient.query('BEGIN');
+                    const selectRes = await pgClient.query(
+                      'SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE',
+                      [orderInfo.order_id]
+                    );
+                    if (selectRes.rows.length > 0) {
+                      const orderData = selectRes.rows[0].data || {};
+                      if (!orderData.sets) orderData.sets = [{}];
+                      const setIndex = orderInfo.set_index || 0;
+                      if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+                      orderData.sets[setIndex].upload_errors = failedUploads.map(f => ({
+                        source: f.sourceUrl?.substring(0, 200),
+                        error: f.error,
+                        time: new Date().toISOString()
+                      }));
+                      await pgClient.query(
+                        'UPDATE "yizi_orders" SET data = $1 WHERE id = $2',
+                        [JSON.stringify(orderData), orderInfo.order_id]
+                      );
+                    }
+                    await pgClient.query('COMMIT');
+                  } catch (txErr) {
+                    await pgClient.query('ROLLBACK');
+                    console.error(`[Pipeline] Failed to write upload errors to DB:`, txErr.message);
+                  } finally {
+                    pgClient.release();
+                  }
+                } catch (connErr) {
+                  console.error(`[Pipeline] Failed to get DB connection for error logging:`, connErr.message);
+                }
+              }
+            } else {
+              console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}, uploadedCount=${uploadedUrls.length}`);
             }
-          } else {
-            console.log(`[Pipeline] Skipped DB write: pool=${!!pool}, isRealOrder=${orderContext?.isRealOrder}, uploadedCount=${uploadedUrls.length}`);
+            break;
           }
-          break;
+
+          case 'http_request': {
+            const method = node.data.method || 'GET';
+            const reqUrl = inputs.url || node.data.url;
+            if (!reqUrl) throw new Error('HTTP Request Node missing URL');
+            
+            const options = { method };
+            if (method !== 'GET' && inputs.body) {
+               options.body = typeof inputs.body === 'string' ? inputs.body : JSON.stringify(inputs.body);
+               options.headers = { 'Content-Type': 'application/json' };
+            }
+
+            console.log(`[Pipeline] HTTP ${method} to ${reqUrl}`);
+            const httpRes = await fetch(reqUrl, options);
+            const httpData = await httpRes.json();
+            outputs.response = httpData;
+            break;
+          }
+
+          default:
+            console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
+            outputs.output = inputs; // Passthrough
+            break;
         }
 
-        case 'http_request':
-          // basic http request implementation
-          const method = node.data.method || 'GET';
-          const reqUrl = inputs.url || node.data.url;
-          if (!reqUrl) throw new Error('HTTP Request Node missing URL');
-          
-          const options = { method };
-          if (method !== 'GET' && inputs.body) {
-             options.body = typeof inputs.body === 'string' ? inputs.body : JSON.stringify(inputs.body);
-             options.headers = { 'Content-Type': 'application/json' };
-          }
+        // Write outputs to shared context (safe: each node writes only its own key)
+        context[node.id] = outputs;
+        completedNodes++;
+        
+        if (pool && completedNodes < totalNodes) {
+           const progress = Math.floor((completedNodes / totalNodes) * 100);
+           pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
+        }
+        
+        console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
+      })();
+    }
 
-          console.log(`[Pipeline] HTTP ${method} to ${reqUrl}`);
-          const httpRes = await fetch(reqUrl, options);
-          const httpData = await httpRes.json();
-          outputs.response = httpData;
-          break;
-
-        default:
-          console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
-          outputs.output = inputs; // Passthrough
-          break;
-      }
-
-      context[node.id] = outputs;
-      completedNodes++;
-      
-      if (pool && completedNodes < totalNodes) {
-         const progress = Math.floor((completedNodes / totalNodes) * 100);
-         pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
-      }
-      
-      console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
+    // Wait for ALL node promises to settle, then check for failures
+    const allResults = await Promise.allSettled(Object.values(nodePromises));
+    const failures = allResults.filter(r => r.status === 'rejected');
+    if (failures.length > 0) {
+      console.error(`[Pipeline] ${failures.length} node(s) failed during concurrent execution.`);
+      // Throw the first error to be caught by the outer try/catch
+      throw failures[0].reason;
     }
 
     let finalOssImages = [];
