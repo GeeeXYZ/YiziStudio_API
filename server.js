@@ -1710,36 +1710,11 @@ app.post('/toolkit/grsai', authenticateToken, async (req, res) => {
   const resultUrl = generateUrl.replace(/\/generate$/, '/result');
   const token = apiKey.trim().replace(/^Bearer\s+/i, '');
 
-  let finalModel = model || 'gpt-image-2';
-  let finalAspectRatio = aspectRatio || '1024x1024';
-
-  if (finalModel === 'gpt-image-2-vip' && finalAspectRatio.includes(':')) {
-    const vipRatioMap = {
-      'auto': '1024x1024',
-      '1:1': '1024x1024',
-      '16:9': '1280x720',
-      '9:16': '720x1280',
-      '4:3': '1152x864',
-      '3:4': '864x1152',
-      '3:2': '1536x1024',
-      '2:3': '1024x1536',
-      '5:4': '1120x896',
-      '4:5': '896x1120',
-      '21:9': '1456x624',
-      '9:21': '624x1456',
-      '1:3': '688x2048',
-      '3:1': '2048x688',
-      '2:1': '1536x768',
-      '1:2': '768x1536'
-    };
-    finalAspectRatio = vipRatioMap[finalAspectRatio] || '1024x1024';
-  }
-
   const payload = {
-    model: finalModel,
+    model: model || 'gpt-image-2',
     prompt: prompt || '',
     images: Array.isArray(images) ? images : (images ? [images] : []),
-    aspectRatio: finalAspectRatio,
+    aspectRatio: aspectRatio || '1024x1024',
     quality: quality || 'standard',
     replyType: 'async'
   };
