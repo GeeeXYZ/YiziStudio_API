@@ -97,10 +97,10 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
 /**
  * Executes a Seedream (Volcengine Ark) image generation
  */
-async function executeSeedream(node, inputs, env) {
 async function executeSeedream(node, inputs, env, pool) {
   const prompt = inputs.prompt || node.data.prompt || '';
-  const endpointId = node.data.endpoint_id || env.SEEDREAM_ENDPOINT_ID || 'ep-xxxx';
+  const globalEndpointId = env.VOLCENGINE_ENDPOINT_ID || await getSetting(pool, 'VOLCENGINE_ENDPOINT_ID');
+  const endpointId = node.data.endpoint_id || node.data.endpointId || globalEndpointId || 'ep-xxxx';
   const sizePreset = node.data.size || '2k (Origin)';
   let images = inputs.images || [];
   
