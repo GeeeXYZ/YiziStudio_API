@@ -64,20 +64,36 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  * Helper to download from a URL and upload directly to OSS with retry
  */
 export async function uploadToOSS(ossClient, url, openid, order_id, set_index, filenamePrefix) {
+  let buffer;
+  let ext = 'png';
+
+  if (url.startsWith('data:image')) {
+    const matches = url.match(/^data:image\/(\w+);base64,(.+)$/);
+    if (matches) {
+      ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+      buffer = Buffer.from(matches[2], 'base64');
+    } else {
+      throw new Error('Invalid base64 image string');
+    }
+  }
+
   const MAX_RETRIES = 3;
   const DOWNLOAD_TIMEOUT_MS = 60000;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      if (!buffer) {
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const arrayBuffer = await response.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
 
-      const extMatch = url.split('.').pop().split('?')[0].match(/^(jpg|jpeg|png|webp|gif)$/i);
-      const ext = extMatch ? extMatch[1] : 'png';
+        const extMatch = url.split('.').pop().split('?')[0].match(/^(jpg|jpeg|png|webp|gif)$/i);
+        if (extMatch) ext = extMatch[1];
+      }
+
       const filename = `${filenamePrefix}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
       const ossPath = `delivery_imgs/${openid}/${order_id}/set${set_index}/${filename}`;
 
@@ -562,7 +578,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           // Normalize: accept images from any reasonable input key, and ensure array
           let rawImages = inputs.images || inputs.output_images || inputs.output || [];
           const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
-          const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && u.startsWith('http'));
+          const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
           const orderInfo = inputs.order_info || orderContext;
           
           console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
@@ -764,7 +780,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
          finalOssImages.push(...out.final_image_urls);
       }
       if (out && out.output && Array.isArray(out.output)) {
-         rawGeneratedImages.push(...out.output.filter(u => typeof u === 'string' && u.startsWith('http')));
+         rawGeneratedImages.push(...out.output.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
       }
     }
 
