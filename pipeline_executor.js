@@ -420,6 +420,21 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     const totalNodes = sortedNodeIds.length;
     let completedNodes = 0;
 
+    // State for tracking random prompt picks within this pipeline execution to prevent duplication
+    const usedPromptIds = [];
+    const promptLibraryMutex = {
+      promise: Promise.resolve(),
+      lock: function() {
+        let resolve;
+        const current = this.promise;
+        this.promise = new Promise(r => resolve = r);
+        return async () => {
+          await current;
+          return resolve;
+        };
+      }
+    };
+
     console.log(`[Pipeline] Starting CONCURRENT execution of ${totalNodes} nodes...`);
 
     // === DATAFLOW CONCURRENCY ===
@@ -598,12 +613,39 @@ export async function runPipeline(workflowJson, orderContext, pool) {
               if (!groupId) throw new Error('prompt_library node missing group_id for random mode');
 
               if (pool) {
-                const res = await pool.query('SELECT content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
-                if (res.rows.length > 0) {
-                  selectedPromptContent = res.rows[0].content;
-                  selectedPreviewImg = res.rows[0].data?.preview_img || '';
-                } else {
-                  throw new Error(`No prompts found in group ${groupId}.`);
+                const unlock = await promptLibraryMutex.lock();
+                try {
+                  let query = 'SELECT id, content, data FROM "yizi_prompts" WHERE group_id = $1';
+                  let params = [groupId];
+                  
+                  if (usedPromptIds.length > 0) {
+                    const placeholders = usedPromptIds.map((_, i) => `$${i + 2}`).join(',');
+                    query += ` AND id NOT IN (${placeholders})`;
+                    params.push(...usedPromptIds);
+                  }
+                  
+                  query += ' ORDER BY RANDOM() LIMIT 1';
+                  
+                  const res = await pool.query(query, params);
+                  if (res.rows.length > 0) {
+                    selectedPromptContent = res.rows[0].content;
+                    selectedPreviewImg = res.rows[0].data?.preview_img || '';
+                    usedPromptIds.push(res.rows[0].id);
+                  } else {
+                    // Fallback to allow repeats if we exhausted all unused prompts in the group
+                    console.warn(`[Pipeline] All unused prompts in group ${groupId} exhausted. Allowing repeats as fallback.`);
+                    const fallbackRes = await pool.query('SELECT id, content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
+                    if (fallbackRes.rows.length > 0) {
+                      selectedPromptContent = fallbackRes.rows[0].content;
+                      selectedPreviewImg = fallbackRes.rows[0].data?.preview_img || '';
+                      usedPromptIds.push(fallbackRes.rows[0].id);
+                    } else {
+                      throw new Error(`No prompts found in group ${groupId}.`);
+                    }
+                  }
+                } finally {
+                  const resolveFn = await unlock();
+                  resolveFn();
                 }
               } else {
                 throw new Error('Database pool not available for prompt_library node execution');
@@ -623,12 +665,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             break;
 
           case 'oss_output': {
-            // Normalize: accept images from any reasonable input key, and ensure array
-            // Use length check to avoid empty-array short-circuit ([] is truthy in JS)
-            let rawImages = (Array.isArray(inputs.images) && inputs.images.length > 0 ? inputs.images : null)
-              || (Array.isArray(inputs.output_images) && inputs.output_images.length > 0 ? inputs.output_images : null)
-              || inputs.output
-              || [];
+            // Normalize: accept images from any reasonable input key
+            let rawImages = inputs.images || inputs.output_images || inputs.output || [];
+            if (Array.isArray(inputs.images) && inputs.images.length > 0) rawImages = inputs.images;
+            else if (Array.isArray(inputs.output_images) && inputs.output_images.length > 0) rawImages = inputs.output_images;
+            
             const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
             const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
             const orderInfo = inputs.order_info || orderContext;

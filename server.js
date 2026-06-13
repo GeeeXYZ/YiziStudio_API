@@ -1618,11 +1618,13 @@ app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
       if (orderRes.rows.length > 0) {
         const orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
         if (orderData.planId) {
-          const skuRes = await pool.query('SELECT data FROM "yizi_sku" WHERE "uuid" = $1 OR "id" = $2', [orderData.planId, orderData.planId]);
+          const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+          const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [orderData.planId]);
           if (skuRes.rows.length > 0) {
             const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
             if (skuData.workflow) {
-              const caseRes = await pool.query('SELECT data FROM "yizi_cases" WHERE "uuid" = $1 OR "id" = $2', [skuData.workflow, skuData.workflow]);
+              const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+              const caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
               if (caseRes.rows.length > 0) {
                  const caseData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
                  workflow_json = caseData.workflow_json || caseData;
@@ -1633,6 +1635,7 @@ app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
       }
     } catch (e) {
       console.error('[API Pipeline] Auto-resolve workflow error:', e.message);
+      return res.json({ msg: 'err', info: `Auto-resolve failed: ${e.message}` });
     }
   }
 
@@ -1746,6 +1749,48 @@ app.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) => {
     }
   } catch (err) {
     console.error(err);
+    return res.json({ msg: 'err', info: err.message });
+  }
+});
+
+// POST /toolkit/upload_to_oss_direct — Manually upload URLs to OSS for a specific order
+app.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res) => {
+  let { urls, openid, order_id, set_index } = req.body;
+  if (!urls || !Array.isArray(urls) || urls.length === 0) return res.json({ msg: 'err', info: 'Missing urls' });
+  if (!openid || !order_id) return res.json({ msg: 'err', info: 'Missing order info' });
+
+  try {
+    const OSS = (await import('ali-oss')).default;
+    const ossConfig = {
+      region: process.env.OSS_REGION,
+      accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+      accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+      bucket: process.env.OSS_BUCKET,
+      secure: true
+    };
+    if (!ossConfig.accessKeyId) return res.json({ msg: 'err', info: 'OSS Not Configured' });
+    const ossClient = new OSS(ossConfig);
+
+    const { uploadToOSS } = await import('./pipeline_executor.js');
+    const uploadedUrls = [];
+    const setIdx = parseInt(set_index) || 0;
+
+    for (const img of urls) {
+       try {
+         const secureUrl = await uploadToOSS(ossClient, img, openid, order_id, setIdx, `del_${Date.now()}`);
+         uploadedUrls.push(secureUrl.replace('http://', 'https://'));
+       } catch (err) {
+         console.error('Direct OSS upload failed for', img, err.message);
+       }
+    }
+
+    if (uploadedUrls.length > 0) {
+      return res.json({ msg: 'ok', uploaded: uploadedUrls });
+    } else {
+      return res.json({ msg: 'err', info: 'All uploads failed' });
+    }
+  } catch (err) {
+    console.error('[Upload OSS Direct Error]', err);
     return res.json({ msg: 'err', info: err.message });
   }
 });
