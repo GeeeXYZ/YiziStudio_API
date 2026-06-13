@@ -235,6 +235,23 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
     replyType: 'async'
   };
 
+  // Backwards compatibility for headless execution (e.g. Toolkit triggers)
+  // where old workflow JSON in DB still uses ratio strings for vip model
+  if (payload.model === 'gpt-image-2-vip' && /^\d+:\d+$/.test(payload.aspectRatio)) {
+    const ratio = payload.aspectRatio;
+    const q = payload.quality || '1K';
+    const fallbackMap = {
+      '1K': { '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280', '4:3': '1152x864', '3:4': '864x1152', '3:2': '1536x1024', '2:3': '1024x1536' },
+      '2K': { '1:1': '2048x2048', '16:9': '2048x1152', '9:16': '1152x2048', '4:3': '2304x1728', '3:4': '1728x2304', '3:2': '2048x1360', '2:3': '1360x2048' },
+      '4K': { '1:1': '2880x2880', '16:9': '3840x2160', '9:16': '2160x3840', '4:3': '3264x2448', '3:4': '2448x3264', '3:2': '3504x2336', '2:3': '2336x3504' }
+    };
+    if (fallbackMap[q] && fallbackMap[q][ratio]) {
+      payload.aspectRatio = fallbackMap[q][ratio];
+    } else {
+      payload.aspectRatio = fallbackMap['1K']['1:1'];
+    }
+  }
+
   // DB Logging: Insert BEFORE submitting to Grsai (so the log is visible even if function dies)
   const tempLogId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let logInserted = false;
