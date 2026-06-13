@@ -313,7 +313,7 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
         
         // DB Logging: Success — pass array directly, JSONB column handles it
         if (pool && logInserted) {
-          pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
+          pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, error_msg = '节点原始产出(尚未入库OSS)', updated_at = NOW() WHERE id = $2`, [JSON.stringify(urls), taskId]).catch(e => console.warn(e.message));
         }
 
         return { output_images: urls, output: urls };
