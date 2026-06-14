@@ -229,7 +229,7 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
 
-  // Collect images in order
+  // Collect images in order from handles
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
     inputs.ref_image_2 || node.data.ref_image_2,
@@ -237,6 +237,7 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     inputs.ref_images || node.data.ref_images || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
+  // Build message content — multimodal if images present, plain text otherwise
   let messageContent;
   if (combined_images.length > 0) {
     messageContent = [
@@ -263,7 +264,9 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     modalities: ["image", "text"]
   };
 
-  console.log(`[OpenRouter Execute] Submitting task to ${endpoint} with payload:`, JSON.stringify(payload));
+  console.log(`[OpenRouter Execute] Submitting to ${endpoint}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}`);
+
+  // Image generation can take a long time — use 180s timeout
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 
@@ -271,7 +274,7 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
       'Authorization': `Bearer ${apiKey.trim()}`
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(60000)
+    signal: AbortSignal.timeout(180000)
   });
 
   if (!res.ok) {
@@ -280,51 +283,88 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   }
 
   const data = await res.json();
+  console.log(`[OpenRouter Execute] Raw response keys: ${JSON.stringify(Object.keys(data))}`);
+
   if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-    throw new Error('OpenRouter API returned invalid response format');
+    throw new Error(`OpenRouter API returned invalid response format. Top-level keys: ${JSON.stringify(Object.keys(data))}. Full: ${JSON.stringify(data).substring(0, 500)}`);
   }
 
   const message = data.choices[0].message;
+  console.log(`[OpenRouter Execute] message keys: ${JSON.stringify(Object.keys(message))}, content type: ${typeof message.content}, has images: ${!!message.images}`);
+
   let imageUrls = [];
 
-  // Parse images if available
+  // ---- Strategy 1: message.images array (documented OpenRouter format) ----
   if (message.images && Array.isArray(message.images)) {
-    imageUrls = message.images.map(img => img.image_url?.url || img.url).filter(Boolean);
-  } else if (Array.isArray(message.content)) {
-    // If content is an array, it might be OpenAI vision format
-    message.content.forEach(item => {
-      if (item.type === 'image_url' && item.image_url?.url) {
+    for (const img of message.images) {
+      if (typeof img === 'string') {
+        // Direct string — could be URL or base64
+        imageUrls.push(img);
+      } else if (img && typeof img === 'object') {
+        // { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
+        const url = img.image_url?.url || img.url || img.b64_json || img.data;
+        if (url) imageUrls.push(url);
+      }
+    }
+    console.log(`[OpenRouter Execute] Strategy 1 (message.images): found ${imageUrls.length} images`);
+  }
+
+  // ---- Strategy 2: message.content is array (OpenAI vision-style) ----
+  if (imageUrls.length === 0 && Array.isArray(message.content)) {
+    for (const item of message.content) {
+      if (item && item.type === 'image_url' && item.image_url?.url) {
         imageUrls.push(item.image_url.url);
       }
-    });
-  } else if (typeof message.content === 'string') {
-    // Fallback: Try to extract markdown image links if returned in text
+    }
+    console.log(`[OpenRouter Execute] Strategy 2 (content array): found ${imageUrls.length} images`);
+  }
+
+  // ---- Strategy 3: message.content is string containing markdown image links ----
+  if (imageUrls.length === 0 && typeof message.content === 'string') {
     const mdRegex = /!\[.*?\]\((.*?)\)/g;
     let match;
     while ((match = mdRegex.exec(message.content)) !== null) {
       if (match[1]) imageUrls.push(match[1]);
     }
-    // Very fallback: If content is just a pure URL or base64 string
+    // Also try bare URLs on their own lines
+    if (imageUrls.length === 0) {
+      const urlRegex = /(https?:\/\/[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)[^\s"'<>]*)/gi;
+      while ((match = urlRegex.exec(message.content)) !== null) {
+        imageUrls.push(match[1]);
+      }
+    }
+    // Last resort: content itself is a data URL
     if (imageUrls.length === 0 && (message.content.startsWith('http') || message.content.startsWith('data:image'))) {
       imageUrls.push(message.content.trim());
     }
+    console.log(`[OpenRouter Execute] Strategy 3 (content string): found ${imageUrls.length} images`);
   }
 
-  // Normalize image URLs to ensure raw base64 strings have the data:image prefix
+  // ---- Strategy 4: top-level data.data array (DALL-E style response) ----
+  if (imageUrls.length === 0 && data.data && Array.isArray(data.data)) {
+    for (const item of data.data) {
+      if (item.url) imageUrls.push(item.url);
+      if (item.b64_json) imageUrls.push(`data:image/png;base64,${item.b64_json}`);
+    }
+    console.log(`[OpenRouter Execute] Strategy 4 (data.data array): found ${imageUrls.length} images`);
+  }
+
+  // Normalize: ensure any raw base64 strings get the data URI prefix
   imageUrls = imageUrls.map(url => {
-    if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith('data:image')) {
-      return `data:image/jpeg;base64,${url.trim()}`;
+    if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith('data:')) {
+      return `data:image/png;base64,${url.trim()}`;
     }
     return url;
   });
 
   if (imageUrls.length === 0) {
-    const debugResponse = JSON.stringify(message).substring(0, 500);
-    throw new Error(`OpenRouter did not return any generated images. Raw message: ${debugResponse}`);
+    const debugMsg = JSON.stringify(message).substring(0, 800);
+    const debugData = data.data ? JSON.stringify(data.data).substring(0, 200) : 'N/A';
+    throw new Error(`OpenRouter did not return any generated images. message: ${debugMsg} | data.data: ${debugData}`);
   }
 
-  console.log(`[OpenRouter Execute] Succeeded! Received ${imageUrls.length} images.`);
-  return { output_images: imageUrls, output: imageUrls };
+  console.log(`[OpenRouter Execute] Succeeded! Received ${imageUrls.length} images. First URL prefix: ${imageUrls[0]?.substring(0, 40)}...`);
+  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
 
 /**
