@@ -419,15 +419,22 @@ async function executeApiyiPreset(node, inputs, env, pool, orderContext) {
     if (size) fd.append('size', size);
     fd.append('n', "1");
 
-    // Fetch the first reference image and append
-    const imgUrl = combined_images[0];
-    try {
-      const imgRes = await fetch(imgUrl);
-      if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
-      const imgBlob = await imgRes.blob();
-      fd.append('image', imgBlob, 'image.png');
-    } catch (e) {
-      throw new Error(`ApiYi failed to process reference image: ${e.message}`);
+    // Fetch all reference images and append
+    for (let i = 0; i < combined_images.length; i++) {
+      const imgUrl = combined_images[i];
+      try {
+        const imgRes = await fetch(imgUrl);
+        if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
+        const imgBlob = await imgRes.blob();
+        let ext = 'png';
+        if (imgBlob.type) {
+           if (imgBlob.type.includes('jpeg') || imgBlob.type.includes('jpg')) ext = 'jpg';
+           else if (imgBlob.type.includes('webp')) ext = 'webp';
+        }
+        fd.append('image', imgBlob, `image_${i}.${ext}`);
+      } catch (e) {
+        throw new Error(`ApiYi failed to process reference image ${i+1}: ${e.message}`);
+      }
     }
 
     reqBody = fd;
