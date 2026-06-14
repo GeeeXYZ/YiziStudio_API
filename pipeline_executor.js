@@ -1004,7 +1004,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
                await pgClient.query(
                  'UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', 
-                 [JSON.stringify(orderData), orderContext.auto_delivery && finalOssImages.length > 0 ? '1' : '0', orderContext.order_id]
+                  [JSON.stringify(orderData), '0', orderContext.order_id]
                );
              }
              await pgClient.query('COMMIT');
