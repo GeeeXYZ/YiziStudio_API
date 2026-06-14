@@ -215,6 +215,99 @@ async function executeSeedream(node, inputs, env, pool) {
 }
 
 /**
+ * Executes a single OpenRouter API Call
+ */
+async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
+  const endpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1/chat/completions';
+  const apiKey = env.OPENROUTER_API_KEY || await getSetting(pool, 'OPENROUTER_API_KEY');
+
+  if (!apiKey) {
+    throw new Error('OpenRouter API Key not configured in .env or Settings');
+  }
+
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
+
+  // Collect images in order
+  let combined_images = [
+    inputs.ref_image_1 || node.data.ref_image_1,
+    inputs.ref_image_2 || node.data.ref_image_2,
+    inputs.ref_image_3 || node.data.ref_image_3,
+    inputs.ref_images || node.data.ref_images || []
+  ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+
+  let messageContent;
+  if (combined_images.length > 0) {
+    messageContent = [
+      { type: "text", text: prompt }
+    ];
+    combined_images.forEach(imgUrl => {
+      messageContent.push({
+        type: "image_url",
+        image_url: { url: imgUrl }
+      });
+    });
+  } else {
+    messageContent = prompt;
+  }
+
+  const payload = {
+    model: modelId,
+    messages: [
+      {
+        role: "user",
+        content: messageContent
+      }
+    ],
+    modalities: ["image", "text"]
+  };
+
+  console.log(`[OpenRouter Execute] Submitting task to ${endpoint} with payload:`, JSON.stringify(payload));
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json', 
+      'Authorization': `Bearer ${apiKey.trim()}`
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(60000)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenRouter API error: [${res.status}] ${errText}`);
+  }
+
+  const data = await res.json();
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error('OpenRouter API returned invalid response format');
+  }
+
+  const message = data.choices[0].message;
+  let imageUrls = [];
+
+  // Parse images if available
+  if (message.images && Array.isArray(message.images)) {
+    imageUrls = message.images.map(img => img.image_url?.url || img.url).filter(Boolean);
+  } else if (message.content) {
+    // Fallback: Try to extract markdown image links if returned in text
+    const mdRegex = /!\[.*?\]\((.*?)\)/g;
+    let match;
+    while ((match = mdRegex.exec(message.content)) !== null) {
+      if (match[1]) imageUrls.push(match[1]);
+    }
+  }
+
+  if (imageUrls.length === 0) {
+    throw new Error('OpenRouter did not return any generated images');
+  }
+
+  console.log(`[OpenRouter Execute] Succeeded! Received ${imageUrls.length} images.`);
+  return { output_images: imageUrls, output: imageUrls };
+}
+
+/**
  * Executes a single Grsai API Call with polling
  */
 async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
@@ -480,8 +573,14 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             // Note: removed circular self-reference (outputs.output = outputs) that caused issues
             break;
 
+          case 'preset_seedream':
+            outputs = await executeSeedreamPreset(node, inputs, process.env, pool);
+            break;
           case 'preset_grsai':
             outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
+            break;
+          case 'preset_openrouter':
+            outputs = await executeOpenRouterPreset(node, inputs, process.env, pool, orderContext);
             break;
 
           case 'seedream':
