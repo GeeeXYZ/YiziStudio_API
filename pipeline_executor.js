@@ -461,7 +461,11 @@ async function executeApiyiPreset(node, inputs, env, pool, orderContext) {
   }
 
   const data = await res.json();
-  const imageUrls = data.data?.map(img => img.url).filter(Boolean) || [];
+  const imageUrls = data.data?.map(img => {
+    if (img.url) return img.url;
+    if (img.b64_json) return `data:image/png;base64,${img.b64_json}`;
+    return null;
+  }).filter(Boolean) || [];
 
   if (imageUrls.length === 0) {
     throw new Error(`ApiYi did not return any generated images. Response: ${JSON.stringify(data)}`);
