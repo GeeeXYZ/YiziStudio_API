@@ -228,7 +228,8 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
-  const imageSize = node.data.imageSize || '';
+  const aspectRatio = node.data.aspectRatio || '';
+  const imageResolution = node.data.imageResolution || '';
 
   // Collect images in order from handles
   let combined_images = [
@@ -265,9 +266,11 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     modalities: ["image", "text"]
   };
 
-  // gpt-image-2 natively supports the `size` parameter (e.g. "1536x2048")
-  if (imageSize) {
-    payload.size = imageSize;
+  // OpenRouter uses image_config for aspect ratio and resolution control
+  if (aspectRatio || imageResolution) {
+    payload.image_config = {};
+    if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
+    if (imageResolution) payload.image_config.image_size = imageResolution;
   }
 
   console.log(`[OpenRouter Execute] Submitting to ${endpoint}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}`);
