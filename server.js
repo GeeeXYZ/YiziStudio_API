@@ -1641,6 +1641,23 @@ app.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
 
   if (!workflow_json) return res.json({ msg: 'err', info: 'workflow_json is required or could not be inferred from order.' });
   
+  // Inject the workflow_override_prompt into the prompt_board node if present
+  if (mock_order?.workflow_override_prompt) {
+    try {
+      let wObj = typeof workflow_json === 'string' ? JSON.parse(workflow_json) : workflow_json;
+      if (wObj && Array.isArray(wObj.nodes)) {
+        const boardNode = wObj.nodes.find(n => n.type === 'prompt_board');
+        if (boardNode) {
+          if (!boardNode.data) boardNode.data = {};
+          boardNode.data.prompt = mock_order.workflow_override_prompt;
+        }
+      }
+      workflow_json = typeof workflow_json === 'string' ? JSON.stringify(wObj) : wObj;
+    } catch(e) {
+      console.error('[Pipeline Override Prompt Error]', e);
+    }
+  }
+
   // Respond immediately, then await pipeline to keep function alive
   res.json({ msg: 'ok', info: 'Pipeline started' });
 

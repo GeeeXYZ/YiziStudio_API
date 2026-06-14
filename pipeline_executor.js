@@ -115,7 +115,8 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
  * Executes a Seedream (Volcengine Ark) image generation
  */
 async function executeSeedream(node, inputs, env, pool) {
-  const prompt = inputs.prompt || node.data.prompt || '';
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const globalEndpointId = env.VOLCENGINE_ENDPOINT_ID || await getSetting(pool, 'VOLCENGINE_ENDPOINT_ID');
   const endpointId = node.data.endpoint_id || node.data.endpointId || globalEndpointId || 'ep-xxxx';
   const sizePreset = node.data.size || '2k (Origin)';
@@ -231,7 +232,8 @@ async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
   
   const token = apiKey.trim().replace(/^Bearer\s+/i, '');
 
-  const prompt = inputs.prompt || node.data.prompt || '';
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   
   // Combine ordered image inputs
   let combined_images = [
@@ -489,6 +491,19 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           case 'text_input':
             outputs.output = node.data.text || '';
             break;
+
+          case 'prompt_board': {
+            // Support arrays if multiple nodes connected, and fallback to generic 'input'
+            const incomingTextArr = [inputs.text_in, inputs.input].flat().filter(Boolean);
+            const incomingText = incomingTextArr.join('\n');
+            
+            const basePrompt = node.data.prompt || '';
+            // Aggregate both, if both exist
+            outputs.prompt = [incomingText, basePrompt].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
+            // Also alias to output for flexibility
+            outputs.output = outputs.prompt;
+            break;
+          }
 
           case 'string_concat': {
             const s1 = inputs.str1 || '';
