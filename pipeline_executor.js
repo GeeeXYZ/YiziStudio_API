@@ -229,6 +229,12 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
 
+  // If a specific image size is configured on the node, inject it into the prompt
+  const imageSize = node.data.imageSize || '';
+  if (imageSize) {
+    prompt = `${prompt}\n\nIMPORTANT: Generate the image at exactly ${imageSize} resolution.`;
+  }
+
   // Collect images in order from handles
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
