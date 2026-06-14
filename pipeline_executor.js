@@ -299,6 +299,14 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     }
   }
 
+  // Normalize image URLs to ensure raw base64 strings have the data:image prefix
+  imageUrls = imageUrls.map(url => {
+    if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith('data:image')) {
+      return `data:image/jpeg;base64,${url.trim()}`;
+    }
+    return url;
+  });
+
   if (imageUrls.length === 0) {
     throw new Error('OpenRouter did not return any generated images');
   }
