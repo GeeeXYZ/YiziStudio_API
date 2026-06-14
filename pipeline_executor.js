@@ -295,7 +295,9 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`OpenRouter API error: [${res.status}] ${errText}`);
+    console.error(`[OpenRouter Execute] FAILED [${res.status}] Payload sent: ${JSON.stringify(payload).substring(0, 500)}`);
+    console.error(`[OpenRouter Execute] Error response: ${errText.substring(0, 1000)}`);
+    throw new Error(`OpenRouter API error: [${res.status}] ${errText.substring(0, 500)}`);
   }
 
   const data = await res.json();
