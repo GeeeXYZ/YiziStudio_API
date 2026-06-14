@@ -218,7 +218,9 @@ async function executeSeedream(node, inputs, env, pool) {
  * Executes a single OpenRouter API Call
  */
 async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
-  const baseEndpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1';
+  const configuredEndpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1/chat/completions';
+  // Ensure endpoint always points to /chat/completions
+  const endpoint = configuredEndpoint.includes('/chat/completions') ? configuredEndpoint : `${configuredEndpoint.replace(/\/$/, '')}/chat/completions`;
   const apiKey = env.OPENROUTER_API_KEY || await getSetting(pool, 'OPENROUTER_API_KEY');
 
   if (!apiKey) {
@@ -253,59 +255,35 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     ? ((imageResolution === '2K' || imageResolution === '4K') ? RATIO_TO_SIZE_2K : RATIO_TO_SIZE)[aspectRatio] || '1024x1024'
     : '';
 
-  // Determine if this is an OpenAI model — if so, use /images/generations endpoint for size control
-  const isOpenAIModel = modelId.startsWith('openai/');
-  const baseUrl = baseEndpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '');
-
-  let payload, requestUrl;
-
-  if (isOpenAIModel && resolvedSize) {
-    // ===== OpenAI models: Use /images/generations endpoint (supports `size` natively) =====
-    requestUrl = `${baseUrl}/images/generations`;
-    payload = {
-      model: modelId,
-      prompt: prompt,
-      n: 1,
-      size: resolvedSize,
-      response_format: 'b64_json'
-    };
-    console.log(`[OpenRouter Execute] Using /images/generations endpoint for OpenAI model. size=${resolvedSize}`);
+  // Build message content
+  let messageContent;
+  if (combined_images.length > 0) {
+    messageContent = [{ type: "text", text: prompt }];
+    combined_images.forEach(imgUrl => {
+      messageContent.push({ type: "image_url", image_url: { url: imgUrl } });
+    });
   } else {
-    // ===== Non-OpenAI models or no size: Use /chat/completions =====
-    requestUrl = `${baseUrl}/chat/completions`;
-
-    let messageContent;
-    if (combined_images.length > 0) {
-      messageContent = [{ type: "text", text: prompt }];
-      combined_images.forEach(imgUrl => {
-        messageContent.push({ type: "image_url", image_url: { url: imgUrl } });
-      });
-    } else {
-      messageContent = prompt;
-    }
-
-    payload = {
-      model: modelId,
-      messages: [{ role: "user", content: messageContent }],
-      modalities: ["image", "text"]
-    };
-
-    // OpenRouter image_config for Gemini/Recraft/etc.
-    if (aspectRatio || imageResolution) {
-      payload.image_config = {};
-      if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
-      if (imageResolution) payload.image_config.image_size = imageResolution;
-    }
-    // Also add size as fallback in case the provider passes it through
-    if (resolvedSize) payload.size = resolvedSize;
-
-    console.log(`[OpenRouter Execute] Using /chat/completions endpoint. model=${modelId}`);
+    messageContent = prompt;
   }
 
-  console.log(`[OpenRouter Execute] POST ${requestUrl}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}, size=${resolvedSize || 'auto'}`);
+  const payload = {
+    model: modelId,
+    messages: [{ role: "user", content: messageContent }],
+    modalities: ["image", "text"]
+  };
+
+  // Pass size via all known mechanisms for maximum compatibility
+  if (aspectRatio || imageResolution) {
+    payload.image_config = {};
+    if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
+    if (imageResolution) payload.image_config.image_size = imageResolution;
+  }
+  if (resolvedSize) payload.size = resolvedSize;
+
+  console.log(`[OpenRouter Execute] POST ${endpoint}, model=${modelId}, prompt=${prompt.length}chars, images=${combined_images.length}, size=${resolvedSize || 'auto'}`);
 
   // Image generation can take a long time — use 180s timeout
-  const res = await fetch(requestUrl, {
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json', 
