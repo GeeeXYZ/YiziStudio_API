@@ -218,7 +218,7 @@ async function executeSeedream(node, inputs, env, pool) {
  * Executes a single OpenRouter API Call
  */
 async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
-  const endpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1/chat/completions';
+  const baseEndpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1';
   const apiKey = env.OPENROUTER_API_KEY || await getSetting(pool, 'OPENROUTER_API_KEY');
 
   if (!apiKey) {
@@ -239,60 +239,73 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     inputs.ref_images || node.data.ref_images || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
-  // Build message content — multimodal if images present, plain text otherwise
-  let messageContent;
-  if (combined_images.length > 0) {
-    messageContent = [
-      { type: "text", text: prompt }
-    ];
-    combined_images.forEach(imgUrl => {
-      messageContent.push({
-        type: "image_url",
-        image_url: { url: imgUrl }
-      });
-    });
-  } else {
-    messageContent = prompt;
-  }
-
-  const payload = {
-    model: modelId,
-    messages: [
-      {
-        role: "user",
-        content: messageContent
-      }
-    ],
-    modalities: ["image", "text"]
-  };
-
-  // Aspect ratio → concrete pixel size mapping for the `size` parameter
+  // Aspect ratio → concrete pixel size mapping
   const RATIO_TO_SIZE = {
     '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536',
     '4:3': '1536x1024', '3:4': '1024x1536', '16:9': '1792x1024', '9:16': '1024x1792'
   };
   const RATIO_TO_SIZE_2K = {
-    '1:1': '2048x2048', '3:2': '2048x1365', '2:3': '1365x2048',
+    '1:1': '2048x2048', '3:2': '2048x1536', '2:3': '1536x2048',
     '4:3': '2048x1536', '3:4': '1536x2048', '16:9': '2048x1152', '9:16': '1152x2048'
   };
 
-  // Strategy 1: OpenRouter image_config (works for Gemini, Recraft, etc.)
-  if (aspectRatio || imageResolution) {
-    payload.image_config = {};
-    if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
-    if (imageResolution) payload.image_config.image_size = imageResolution;
+  const resolvedSize = aspectRatio
+    ? ((imageResolution === '2K' || imageResolution === '4K') ? RATIO_TO_SIZE_2K : RATIO_TO_SIZE)[aspectRatio] || '1024x1024'
+    : '';
+
+  // Determine if this is an OpenAI model — if so, use /images/generations endpoint for size control
+  const isOpenAIModel = modelId.startsWith('openai/');
+  const baseUrl = baseEndpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '');
+
+  let payload, requestUrl;
+
+  if (isOpenAIModel && resolvedSize) {
+    // ===== OpenAI models: Use /images/generations endpoint (supports `size` natively) =====
+    requestUrl = `${baseUrl}/images/generations`;
+    payload = {
+      model: modelId,
+      prompt: prompt,
+      n: 1,
+      size: resolvedSize,
+      response_format: 'b64_json'
+    };
+    console.log(`[OpenRouter Execute] Using /images/generations endpoint for OpenAI model. size=${resolvedSize}`);
+  } else {
+    // ===== Non-OpenAI models or no size: Use /chat/completions =====
+    requestUrl = `${baseUrl}/chat/completions`;
+
+    let messageContent;
+    if (combined_images.length > 0) {
+      messageContent = [{ type: "text", text: prompt }];
+      combined_images.forEach(imgUrl => {
+        messageContent.push({ type: "image_url", image_url: { url: imgUrl } });
+      });
+    } else {
+      messageContent = prompt;
+    }
+
+    payload = {
+      model: modelId,
+      messages: [{ role: "user", content: messageContent }],
+      modalities: ["image", "text"]
+    };
+
+    // OpenRouter image_config for Gemini/Recraft/etc.
+    if (aspectRatio || imageResolution) {
+      payload.image_config = {};
+      if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
+      if (imageResolution) payload.image_config.image_size = imageResolution;
+    }
+    // Also add size as fallback in case the provider passes it through
+    if (resolvedSize) payload.size = resolvedSize;
+
+    console.log(`[OpenRouter Execute] Using /chat/completions endpoint. model=${modelId}`);
   }
 
-  // Strategy 2: Native OpenAI `size` param (works for gpt-image-2 via some providers)
-  if (aspectRatio) {
-    const sizeMap = (imageResolution === '2K' || imageResolution === '4K') ? RATIO_TO_SIZE_2K : RATIO_TO_SIZE;
-    payload.size = sizeMap[aspectRatio] || RATIO_TO_SIZE[aspectRatio] || '1024x1024';
-  }
-
-  console.log(`[OpenRouter Execute] Submitting to ${endpoint}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}`);
+  console.log(`[OpenRouter Execute] POST ${requestUrl}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}, size=${resolvedSize || 'auto'}`);
 
   // Image generation can take a long time — use 180s timeout
-  const res = await fetch(endpoint, {
+  const res = await fetch(requestUrl, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json', 
@@ -310,68 +323,63 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   const data = await res.json();
   console.log(`[OpenRouter Execute] Raw response keys: ${JSON.stringify(Object.keys(data))}`);
 
-  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-    throw new Error(`OpenRouter API returned invalid response format. Top-level keys: ${JSON.stringify(Object.keys(data))}. Full: ${JSON.stringify(data).substring(0, 500)}`);
-  }
-
-  const message = data.choices[0].message;
-  console.log(`[OpenRouter Execute] message keys: ${JSON.stringify(Object.keys(message))}, content type: ${typeof message.content}, has images: ${!!message.images}`);
-
   let imageUrls = [];
 
-  // ---- Strategy 1: message.images array (documented OpenRouter format) ----
-  if (message.images && Array.isArray(message.images)) {
-    for (const img of message.images) {
-      if (typeof img === 'string') {
-        // Direct string — could be URL or base64
-        imageUrls.push(img);
-      } else if (img && typeof img === 'object') {
-        // { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
-        const url = img.image_url?.url || img.url || img.b64_json || img.data;
-        if (url) imageUrls.push(url);
-      }
-    }
-    console.log(`[OpenRouter Execute] Strategy 1 (message.images): found ${imageUrls.length} images`);
-  }
-
-  // ---- Strategy 2: message.content is array (OpenAI vision-style) ----
-  if (imageUrls.length === 0 && Array.isArray(message.content)) {
-    for (const item of message.content) {
-      if (item && item.type === 'image_url' && item.image_url?.url) {
-        imageUrls.push(item.image_url.url);
-      }
-    }
-    console.log(`[OpenRouter Execute] Strategy 2 (content array): found ${imageUrls.length} images`);
-  }
-
-  // ---- Strategy 3: message.content is string containing markdown image links ----
-  if (imageUrls.length === 0 && typeof message.content === 'string') {
-    const mdRegex = /!\[.*?\]\((.*?)\)/g;
-    let match;
-    while ((match = mdRegex.exec(message.content)) !== null) {
-      if (match[1]) imageUrls.push(match[1]);
-    }
-    // Also try bare URLs on their own lines
-    if (imageUrls.length === 0) {
-      const urlRegex = /(https?:\/\/[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)[^\s"'<>]*)/gi;
-      while ((match = urlRegex.exec(message.content)) !== null) {
-        imageUrls.push(match[1]);
-      }
-    }
-    // Last resort: content itself is a data URL
-    if (imageUrls.length === 0 && (message.content.startsWith('http') || message.content.startsWith('data:image'))) {
-      imageUrls.push(message.content.trim());
-    }
-    console.log(`[OpenRouter Execute] Strategy 3 (content string): found ${imageUrls.length} images`);
-  }
-
-  // ---- Strategy 4: top-level data.data array (DALL-E style response) ----
-  if (imageUrls.length === 0 && data.data && Array.isArray(data.data)) {
+  // ===== Parse /images/generations response: { data: [{ b64_json: "...", url: "..." }] } =====
+  if (data.data && Array.isArray(data.data)) {
     for (const item of data.data) {
-      if (item.url) imageUrls.push(item.url);
       if (item.b64_json) imageUrls.push(`data:image/png;base64,${item.b64_json}`);
+      else if (item.url) imageUrls.push(item.url);
     }
-    console.log(`[OpenRouter Execute] Strategy 4 (data.data array): found ${imageUrls.length} images`);
+    console.log(`[OpenRouter Execute] /images/generations format: found ${imageUrls.length} images`);
+  }
+
+  // ===== Parse /chat/completions response =====
+  if (imageUrls.length === 0 && data.choices && data.choices[0] && data.choices[0].message) {
+    const message = data.choices[0].message;
+    console.log(`[OpenRouter Execute] message keys: ${JSON.stringify(Object.keys(message))}, content type: ${typeof message.content}, has images: ${!!message.images}`);
+
+    // Strategy 1: message.images array (documented OpenRouter format)
+    if (message.images && Array.isArray(message.images)) {
+      for (const img of message.images) {
+        if (typeof img === 'string') {
+          imageUrls.push(img);
+        } else if (img && typeof img === 'object') {
+          const url = img.image_url?.url || img.url || img.b64_json || img.data;
+          if (url) imageUrls.push(url);
+        }
+      }
+      console.log(`[OpenRouter Execute] Strategy 1 (message.images): found ${imageUrls.length} images`);
+    }
+
+    // Strategy 2: message.content is array (OpenAI vision-style)
+    if (imageUrls.length === 0 && Array.isArray(message.content)) {
+      for (const item of message.content) {
+        if (item && item.type === 'image_url' && item.image_url?.url) {
+          imageUrls.push(item.image_url.url);
+        }
+      }
+      console.log(`[OpenRouter Execute] Strategy 2 (content array): found ${imageUrls.length} images`);
+    }
+
+    // Strategy 3: message.content is string containing markdown image links
+    if (imageUrls.length === 0 && typeof message.content === 'string') {
+      const mdRegex = /!\[.*?\]\((.*?)\)/g;
+      let match;
+      while ((match = mdRegex.exec(message.content)) !== null) {
+        if (match[1]) imageUrls.push(match[1]);
+      }
+      if (imageUrls.length === 0) {
+        const urlRegex = /(https?:\/\/[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)[^\s"'<>]*)/gi;
+        while ((match = urlRegex.exec(message.content)) !== null) {
+          imageUrls.push(match[1]);
+        }
+      }
+      if (imageUrls.length === 0 && (message.content.startsWith('http') || message.content.startsWith('data:image'))) {
+        imageUrls.push(message.content.trim());
+      }
+      console.log(`[OpenRouter Execute] Strategy 3 (content string): found ${imageUrls.length} images`);
+    }
   }
 
   // Normalize: ensure any raw base64 strings get the data URI prefix
@@ -383,9 +391,8 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   });
 
   if (imageUrls.length === 0) {
-    const debugMsg = JSON.stringify(message).substring(0, 800);
-    const debugData = data.data ? JSON.stringify(data.data).substring(0, 200) : 'N/A';
-    throw new Error(`OpenRouter did not return any generated images. message: ${debugMsg} | data.data: ${debugData}`);
+    const debugFull = JSON.stringify(data).substring(0, 800);
+    throw new Error(`OpenRouter did not return any generated images. Response: ${debugFull}`);
   }
 
   console.log(`[OpenRouter Execute] Succeeded! Received ${imageUrls.length} images. First URL prefix: ${imageUrls[0]?.substring(0, 40)}...`);
