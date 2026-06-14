@@ -228,12 +228,7 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
-
-  // If a specific image size is configured on the node, inject it into the prompt
   const imageSize = node.data.imageSize || '';
-  if (imageSize) {
-    prompt = `${prompt}\n\nIMPORTANT: Generate the image at exactly ${imageSize} resolution.`;
-  }
 
   // Collect images in order from handles
   let combined_images = [
@@ -269,6 +264,11 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     ],
     modalities: ["image", "text"]
   };
+
+  // gpt-image-2 natively supports the `size` parameter (e.g. "1536x2048")
+  if (imageSize) {
+    payload.size = imageSize;
+  }
 
   console.log(`[OpenRouter Execute] Submitting to ${endpoint}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}`);
 
