@@ -290,12 +290,23 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   // Parse images if available
   if (message.images && Array.isArray(message.images)) {
     imageUrls = message.images.map(img => img.image_url?.url || img.url).filter(Boolean);
-  } else if (message.content) {
+  } else if (Array.isArray(message.content)) {
+    // If content is an array, it might be OpenAI vision format
+    message.content.forEach(item => {
+      if (item.type === 'image_url' && item.image_url?.url) {
+        imageUrls.push(item.image_url.url);
+      }
+    });
+  } else if (typeof message.content === 'string') {
     // Fallback: Try to extract markdown image links if returned in text
     const mdRegex = /!\[.*?\]\((.*?)\)/g;
     let match;
     while ((match = mdRegex.exec(message.content)) !== null) {
       if (match[1]) imageUrls.push(match[1]);
+    }
+    // Very fallback: If content is just a pure URL or base64 string
+    if (imageUrls.length === 0 && (message.content.startsWith('http') || message.content.startsWith('data:image'))) {
+      imageUrls.push(message.content.trim());
     }
   }
 
@@ -308,7 +319,8 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
   });
 
   if (imageUrls.length === 0) {
-    throw new Error('OpenRouter did not return any generated images');
+    const debugResponse = JSON.stringify(message).substring(0, 500);
+    throw new Error(`OpenRouter did not return any generated images. Raw message: ${debugResponse}`);
   }
 
   console.log(`[OpenRouter Execute] Succeeded! Received ${imageUrls.length} images.`);
