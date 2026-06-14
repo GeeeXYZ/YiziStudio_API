@@ -691,7 +691,8 @@ app.post('/client/order/create', authenticateToken, async (req, res) => {
                 model_uuid: data.model_uuid,
                 images: set.images || [],
                 prompt: set.extra_prompt || '',
-                model_name: data.model_name || ''
+                model_name: data.model_name || '',
+                auto_delivery: skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1'
               };
               
               console.log(`[Auto Trigger] Starting pipeline for Order ${orderId} Set ${index}`);
