@@ -266,11 +266,27 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
     modalities: ["image", "text"]
   };
 
-  // OpenRouter uses image_config for aspect ratio and resolution control
+  // Aspect ratio → concrete pixel size mapping for the `size` parameter
+  const RATIO_TO_SIZE = {
+    '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536',
+    '4:3': '1536x1024', '3:4': '1024x1536', '16:9': '1792x1024', '9:16': '1024x1792'
+  };
+  const RATIO_TO_SIZE_2K = {
+    '1:1': '2048x2048', '3:2': '2048x1365', '2:3': '1365x2048',
+    '4:3': '2048x1536', '3:4': '1536x2048', '16:9': '2048x1152', '9:16': '1152x2048'
+  };
+
+  // Strategy 1: OpenRouter image_config (works for Gemini, Recraft, etc.)
   if (aspectRatio || imageResolution) {
     payload.image_config = {};
     if (aspectRatio) payload.image_config.aspect_ratio = aspectRatio;
     if (imageResolution) payload.image_config.image_size = imageResolution;
+  }
+
+  // Strategy 2: Native OpenAI `size` param (works for gpt-image-2 via some providers)
+  if (aspectRatio) {
+    const sizeMap = (imageResolution === '2K' || imageResolution === '4K') ? RATIO_TO_SIZE_2K : RATIO_TO_SIZE;
+    payload.size = sizeMap[aspectRatio] || RATIO_TO_SIZE[aspectRatio] || '1024x1024';
   }
 
   console.log(`[OpenRouter Execute] Submitting to ${endpoint}, model=${modelId}, prompt length=${prompt.length}, input images=${combined_images.length}`);
