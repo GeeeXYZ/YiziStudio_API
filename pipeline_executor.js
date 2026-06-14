@@ -1002,6 +1002,20 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                    });
                  }
                  console.log(`[Pipeline Auto-Delivery] Pushed ${finalOssImages.length} images to delivery pool for Order ${orderContext.order_id}`);
+
+                 // Notify user via SSE
+                 if (orderContext.eventEmitter) {
+                   try {
+                     orderContext.eventEmitter.emit(`orderUpdate:${orderContext.openid}`, {
+                       orderId: orderContext.order_id,
+                       event: 'AUTO_DELIVERY',
+                       deliveryCount: finalOssImages.length
+                     });
+                     console.log(`[Pipeline Auto-Delivery] SSE notification sent to user ${orderContext.openid}`);
+                   } catch (sseErr) {
+                     console.warn(`[Pipeline Auto-Delivery] SSE emit failed:`, sseErr.message);
+                   }
+                 }
                }
 
                await pgClient.query(
