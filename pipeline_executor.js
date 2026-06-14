@@ -380,6 +380,98 @@ async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
 }
 
 /**
+ * Executes an ApiYi API Call
+ */
+async function executeApiyiPreset(node, inputs, env, pool, orderContext) {
+  const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
+  const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
+
+  if (!apiKey) {
+    throw new Error('ApiYi API Key not configured in .env or Settings');
+  }
+
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  const modelId = node.data.modelId || 'gpt-image-2-vip';
+  const size = node.data.imageResolution || '1024x1024';
+
+  // Collect images
+  let combined_images = [
+    inputs.ref_image_1 || node.data.ref_image_1,
+    inputs.ref_image_2 || node.data.ref_image_2,
+    inputs.ref_image_3 || node.data.ref_image_3,
+    inputs.ref_images || node.data.ref_images || []
+  ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+
+  const hasReferenceImages = combined_images.length > 0;
+  let endpointUrl;
+  let reqBody;
+  let headers = {
+    'Authorization': `Bearer ${apiKey.trim()}`
+  };
+
+  if (hasReferenceImages) {
+    // Image-to-image mode via /v1/images/edits
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+    const fd = new FormData();
+    fd.append('model', modelId);
+    fd.append('prompt', prompt);
+    if (size) fd.append('size', size);
+    fd.append('n', "1");
+
+    // Fetch the first reference image and append
+    const imgUrl = combined_images[0];
+    try {
+      const imgRes = await fetch(imgUrl);
+      if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
+      const imgBlob = await imgRes.blob();
+      fd.append('image', imgBlob, 'image.png');
+    } catch (e) {
+      throw new Error(`ApiYi failed to process reference image: ${e.message}`);
+    }
+
+    reqBody = fd;
+  } else {
+    // Text-to-image mode via /v1/images/generations
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+    const payload = {
+      model: modelId,
+      prompt: prompt,
+      n: 1
+    };
+    if (size) payload.size = size;
+
+    reqBody = JSON.stringify(payload);
+    headers['Content-Type'] = 'application/json';
+  }
+
+  console.log(`[ApiYi Execute] POST ${endpointUrl}, model=${modelId}, size=${size}, hasImages=${hasReferenceImages}`);
+
+  const res = await fetch(endpointUrl, {
+    method: 'POST',
+    headers: headers,
+    body: reqBody,
+    signal: AbortSignal.timeout(360000) // 360s timeout
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error(`[ApiYi Execute] FAILED [${res.status}] Error response: ${errText.substring(0, 1000)}`);
+    throw new Error(`ApiYi API error: [${res.status}] ${errText.substring(0, 500)}`);
+  }
+
+  const data = await res.json();
+  const imageUrls = data.data?.map(img => img.url).filter(Boolean) || [];
+
+  if (imageUrls.length === 0) {
+    throw new Error(`ApiYi did not return any generated images. Response: ${JSON.stringify(data)}`);
+  }
+
+  console.log(`[ApiYi Execute] Succeeded! Received ${imageUrls.length} images. First URL prefix: ${imageUrls[0]?.substring(0, 40)}...`);
+  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
+}
+
+/**
  * Executes a single Grsai API Call with polling
  */
 async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
@@ -647,6 +739,9 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
           case 'preset_seedream':
             outputs = await executeSeedreamPreset(node, inputs, process.env, pool);
+            break;
+          case 'preset_apiyi':
+            outputs = await executeApiyiPreset(node, inputs, process.env, pool, orderContext);
             break;
           case 'preset_grsai':
             outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext);
