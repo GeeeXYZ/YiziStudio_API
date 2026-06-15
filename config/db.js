@@ -22,6 +22,11 @@ pool.query(`
     ALTER TABLE "yizi_comments" ADD COLUMN IF NOT EXISTS "order_id" TEXT;
 `).catch(() => {});
 
+// Unify yizi_model schema to use uuid instead of id
+pool.query(`
+    ALTER TABLE "yizi_model" RENAME COLUMN "id" TO "uuid";
+`).catch(() => {});
+
 // Cache for table columns to avoid repetitive schema queries
 const tableColumnsCache = {};
 
