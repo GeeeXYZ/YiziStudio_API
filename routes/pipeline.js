@@ -21,10 +21,11 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
           const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
           if (skuData.workflow) {
             const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-            const caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+            const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
             if (caseRes.rows.length > 0) {
-               const caseData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
-               workflow_json = caseData.workflow_json || caseData;
+               const row = caseRes.rows[0];
+               const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+               workflow_json = row.workflow_json || caseData.workflow_json || caseData;
             }
           }
         }
@@ -66,10 +67,11 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
             const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
             if (skuData.workflow) {
               const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-              const caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+              const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
               if (caseRes.rows.length > 0) {
-                 const caseData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
-                 workflow_json = caseData.workflow_json || caseData;
+                 const row = caseRes.rows[0];
+                 const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+                 workflow_json = row.workflow_json || caseData.workflow_json || caseData;
               }
             }
           }
