@@ -325,6 +325,41 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
         }
       });
 
+      if (module === 'client' && db_name === 'yizi_model') {
+        let userModels = [];
+        if (req.user) {
+          try {
+            const userRes = await pool.query('SELECT data FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1', [req.user.unionid || req.user.phone]);
+            if (userRes.rows.length > 0 && userRes.rows[0].data) {
+              let uData = userRes.rows[0].data;
+              if (typeof uData === 'string') uData = JSON.parse(uData);
+              if (uData.exclusive_models) {
+                userModels = uData.exclusive_models.split(',').filter(Boolean);
+              }
+            }
+          } catch(e) {
+            console.error('[Client Model List Filter Error]', e);
+          }
+        }
+        
+        const validCols = await getTableColumns(db_name);
+        let exclusiveCondition = '';
+        if (validCols.includes('is_exclusive')) {
+          exclusiveCondition = `("is_exclusive" IS NULL OR "is_exclusive" = false OR "is_exclusive"::text = 'false' OR "is_exclusive"::text = '0')`;
+        } else {
+          exclusiveCondition = `(data->>'is_exclusive' IS NULL OR data->>'is_exclusive' = 'false' OR data->>'is_exclusive' = '0')`;
+        }
+
+        if (userModels.length > 0) {
+          const inPlaceholders = userModels.map((_, i) => `$${placeholderIdx + i}`).join(', ');
+          exclusiveCondition = `(${exclusiveCondition} OR "uuid" IN (${inPlaceholders}))`;
+          values.push(...userModels);
+          placeholderIdx += userModels.length;
+        }
+        
+        whereClauses.push(exclusiveCondition);
+      }
+
       const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
       
       // Get total count
