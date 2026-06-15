@@ -329,12 +329,18 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
         let userModels = [];
         if (req.user) {
           try {
-            const userRes = await pool.query('SELECT data FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1', [req.user.unionid || req.user.phone]);
-            if (userRes.rows.length > 0 && userRes.rows[0].data) {
-              let uData = userRes.rows[0].data;
-              if (typeof uData === 'string') uData = JSON.parse(uData);
-              if (uData.exclusive_models) {
-                userModels = uData.exclusive_models.split(',').filter(Boolean);
+            const userRes = await pool.query('SELECT * FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1', [req.user.unionid || req.user.phone]);
+            if (userRes.rows.length > 0) {
+              const u = userRes.rows[0];
+              let uData = {};
+              if (typeof u.data === 'string') {
+                try { uData = JSON.parse(u.data); } catch(e) {}
+              } else if (u.data) {
+                uData = u.data;
+              }
+              const exclusiveStr = u.exclusive_models || uData.exclusive_models;
+              if (exclusiveStr) {
+                userModels = exclusiveStr.split(',').filter(Boolean);
               }
             }
           } catch(e) {
