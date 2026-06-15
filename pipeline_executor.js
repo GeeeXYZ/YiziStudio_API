@@ -777,6 +777,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             const basePrompt = node.data.prompt || '';
             // Aggregate both, if both exist
             outputs.prompt = [incomingText, basePrompt].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
+            
+            if (orderContext && orderContext.workflow_override_prompt) {
+              outputs.prompt = orderContext.workflow_override_prompt;
+            }
+
             // Also alias to output for flexibility
             outputs.output = outputs.prompt;
             break;
@@ -1045,9 +1050,44 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       if (out && out.output && Array.isArray(out.output)) {
          rawGeneratedImages.push(...out.output.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
       }
+      if (out && out.output_images && Array.isArray(out.output_images)) {
+         rawGeneratedImages.push(...out.output_images.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
+      }
     }
 
     let isOssSuccess = finalOssImages.length > 0;
+
+    // Automatic Fallback Upload to OSS if oss_output node was missing or failed
+    if (!isOssSuccess && rawGeneratedImages.length > 0) {
+       console.log(`[Pipeline] No OSS images found. Attempting fallback upload for ${rawGeneratedImages.length} raw images.`);
+       try {
+           const ossConfig = {
+               region: process.env.OSS_REGION,
+               accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+               accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+               bucket: process.env.OSS_BUCKET,
+               secure: true
+           };
+           if (ossConfig.accessKeyId) {
+               const ossClient = new OSS(ossConfig);
+               for (const imgUrl of rawGeneratedImages) {
+                   try {
+                       console.log(`[Pipeline] Fallback OSS Uploading ${imgUrl}`);
+                       const uploadedUrl = await uploadToOSS(ossClient, imgUrl, orderContext.openid, orderContext.order_id, orderContext.set_index || 0, `del_fallback_${Date.now()}`);
+                       finalOssImages.push(uploadedUrl.replace('http://', 'https://'));
+                   } catch(e) {
+                       console.warn(`[Pipeline] Fallback OSS Upload failed for ${imgUrl}:`, e.message);
+                   }
+               }
+           }
+           if (finalOssImages.length > 0) {
+               isOssSuccess = true;
+           }
+       } catch(e) {
+           console.error(`[Pipeline] Fallback OSS upload error:`, e.message);
+       }
+    }
+
     let imagesToSave = isOssSuccess ? finalOssImages : rawGeneratedImages;
     let errorSuffix = '';
     

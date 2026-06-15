@@ -228,6 +228,9 @@ router.get('/client/order/events', authenticateToken, (req, res) => {
     'Connection': 'keep-alive',
     'X-Accel-Buffering': 'no' // Prevent Nginx buffering
   });
+  if (res.flushHeaders) {
+    res.flushHeaders();
+  }
 
   // Send an initial connected event
   res.write(`data: ${JSON.stringify({ event: 'CONNECTED', unionid })}\n\n`);
