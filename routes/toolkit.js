@@ -78,6 +78,15 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
         if (!g.id || !g.title) continue;
 
         if (g.data && typeof g.data.cover_img === 'string' && g.data.cover_img.startsWith('data:image')) {
+          const base64Data = g.data.cover_img.replace(/^data:image\/\w+;base64,/, "");
+          let buffer = Buffer.from(base64Data, 'base64');
+          
+          const sharp = (await import('sharp')).default;
+          const metadata = await sharp(buffer).metadata();
+          if (metadata.width > 600 || metadata.height > 600) {
+            throw new Error(`分类库 [${g.title || g.id}] 的封面图尺寸过大 (${metadata.width}x${metadata.height})，请在前端将其压缩至最大边不大于600px后再同步。`);
+          }
+
           try {
             const ossConfig = {
               region: process.env.OSS_REGION,
@@ -86,16 +95,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
               bucket: process.env.OSS_BUCKET
             };
             const ossClient = new OSS(ossConfig);
-            const base64Data = g.data.cover_img.replace(/^data:image\/\w+;base64,/, "");
-            let buffer = Buffer.from(base64Data, 'base64');
             
-            const sharp = (await import('sharp')).default;
-            buffer = await sharp(buffer)
-              .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 85 })
-              .toBuffer();
-            
-            const ossPath = `prompts/group_cover_${g.id}_${Date.now()}.jpg`;
+            const ossPath = `prompts/group_cover_${g.id}_${Date.now()}.${metadata.format || 'jpg'}`;
             const result = await ossClient.put(ossPath, buffer);
             g.data.cover_img = result.url.replace('http://', 'https://');
           } catch (ossErr) {
@@ -120,6 +121,15 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
       
       // Upload base64 preview images to OSS
       if (p.data && typeof p.data.preview_img === 'string' && p.data.preview_img.startsWith('data:image')) {
+        const base64Data = p.data.preview_img.replace(/^data:image\/\w+;base64,/, "");
+        let buffer = Buffer.from(base64Data, 'base64');
+        
+        const sharp = (await import('sharp')).default;
+        const metadata = await sharp(buffer).metadata();
+        if (metadata.width > 600 || metadata.height > 600) {
+          throw new Error(`提示词 [${p.data?.title || p.id}] 的预览图尺寸过大 (${metadata.width}x${metadata.height})，请在前端将其压缩至最大边不大于600px后再同步。`);
+        }
+
         try {
           const ossConfig = {
             region: process.env.OSS_REGION,
@@ -128,17 +138,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
             bucket: process.env.OSS_BUCKET
           };
           const ossClient = new OSS(ossConfig);
-          const base64Data = p.data.preview_img.replace(/^data:image\/\w+;base64,/, "");
-          let buffer = Buffer.from(base64Data, 'base64');
           
-          // Resize: max edge 600px, JPEG 85% quality
-          const sharp = (await import('sharp')).default;
-          buffer = await sharp(buffer)
-            .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: 85 })
-            .toBuffer();
-          
-          const ossPath = `prompts/preview_${p.id}_${Date.now()}.jpg`;
+          const ossPath = `prompts/preview_${p.id}_${Date.now()}.${metadata.format || 'jpg'}`;
           const result = await ossClient.put(ossPath, buffer);
           p.data.preview_img = result.url.replace('http://', 'https://');
         } catch (ossErr) {
