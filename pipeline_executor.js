@@ -1,6 +1,5 @@
 import OSS from 'ali-oss';
 import crypto from 'crypto';
-import sharp from 'sharp';
 import { getSetting } from './config_manager.js';
 
 /**
@@ -160,6 +159,7 @@ async function executeSeedream(node, inputs, env, pool) {
           let buffer = Buffer.from(arrayBuffer);
           
           // Pre-compress using sharp to avoid huge payloads (max 1536px, 85% JPEG)
+          const sharp = (await import('sharp')).default;
           buffer = await sharp(buffer)
             .resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true })
             .jpeg({ quality: 85 })
