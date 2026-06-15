@@ -10,29 +10,45 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
   try {
     const { order_id } = req.params;
     let workflow_json = null;
+    console.log(`[order_prompt] Fetching prompt for order: ${order_id}`);
 
     const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [order_id]);
     if (orderRes.rows.length > 0) {
       const orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
-      if (orderData.planId) {
+      console.log(`[order_prompt] orderData.workflow =`, orderData.workflow, `orderData.planId =`, orderData.planId);
+      
+      let workflow_uuid = orderData.workflow;
+      
+      if (!workflow_uuid && orderData.planId) {
         const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
         const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [orderData.planId]);
         if (skuRes.rows.length > 0) {
           const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
-          if (skuData.workflow) {
-            const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-            const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
-            if (caseRes.rows.length > 0) {
-               const row = caseRes.rows[0];
-               const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
-               workflow_json = row.workflow_json || caseData.workflow_json || caseData;
-            }
-          }
+          console.log(`[order_prompt] skuData.workflow =`, skuData.workflow);
+          workflow_uuid = skuData.workflow;
+        } else {
+           console.log(`[order_prompt] No SKU found for planId:`, orderData.planId);
         }
       }
+
+      if (workflow_uuid) {
+        const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+        const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflow_uuid]);
+        if (caseRes.rows.length > 0) {
+           const row = caseRes.rows[0];
+           const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+           workflow_json = row.workflow_json || caseData.workflow_json || caseData;
+           console.log(`[order_prompt] Found workflow_json?`, !!workflow_json);
+        } else {
+           console.log(`[order_prompt] No case found for workflow UUID:`, workflow_uuid);
+        }
+      }
+    } else {
+       console.log(`[order_prompt] No order found for id:`, order_id);
     }
 
     if (!workflow_json) {
+      console.log(`[order_prompt] Exiting early, no workflow_json`);
       return res.json({ msg: 'ok', result: { prompt: '' } });
     }
 
@@ -41,6 +57,9 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
     if (wObj && Array.isArray(wObj.nodes)) {
       const boardNode = wObj.nodes.find(n => n.type === 'prompt_board');
       if (boardNode) extractedPrompt = boardNode.data?.prompt || '';
+      console.log(`[order_prompt] extractedPrompt length:`, extractedPrompt.length);
+    } else {
+      console.log(`[order_prompt] wObj.nodes is missing or not an array`);
     }
 
     res.json({ msg: 'ok', result: { prompt: extractedPrompt } });
