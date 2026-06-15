@@ -49,14 +49,21 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
 
 // POST /toolkit/grsai — Direct Grsai API call from Toolkit (no pipeline, synchronous polling)
 router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
-  const { prompts } = req.body;
+  const { prompts, groups } = req.body;
   if (!Array.isArray(prompts)) return res.json({ msg: 'err', info: 'Invalid data format. Expected prompts array.' });
   
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     
-    // Ensure table exists
+    // Ensure tables exist
+    await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompt_groups" (
+      id VARCHAR(50) PRIMARY KEY,
+      title VARCHAR(100),
+      data JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompts" (
       id VARCHAR(50) PRIMARY KEY,
       group_id VARCHAR(50),
@@ -64,6 +71,49 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
       data JSONB,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    let groupsSynced = 0;
+    if (Array.isArray(groups)) {
+      for (const g of groups) {
+        if (!g.id || !g.title) continue;
+
+        if (g.data && typeof g.data.cover_img === 'string' && g.data.cover_img.startsWith('data:image')) {
+          try {
+            const ossConfig = {
+              region: process.env.OSS_REGION,
+              accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+              accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+              bucket: process.env.OSS_BUCKET
+            };
+            const ossClient = new OSS(ossConfig);
+            const base64Data = g.data.cover_img.replace(/^data:image\/\w+;base64,/, "");
+            let buffer = Buffer.from(base64Data, 'base64');
+            
+            const sharp = (await import('sharp')).default;
+            buffer = await sharp(buffer)
+              .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+              .jpeg({ quality: 85 })
+              .toBuffer();
+            
+            const ossPath = `prompts/group_cover_${g.id}_${Date.now()}.jpg`;
+            const result = await ossClient.put(ossPath, buffer);
+            g.data.cover_img = result.url.replace('http://', 'https://');
+          } catch (ossErr) {
+            console.error(`[Prompt Sync] Failed to upload cover image for group ${g.id}:`, ossErr.message);
+            g.data.cover_img = ''; // Remove massive base64 string on failure
+          }
+        }
+
+        const insertQuery = `
+          INSERT INTO "yizi_prompt_groups" (id, title, data)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (id) DO UPDATE 
+          SET title = EXCLUDED.title, data = EXCLUDED.data
+        `;
+        await client.query(insertQuery, [g.id, g.title, g.data || {}]);
+        groupsSynced++;
+      }
+    }
 
     for (const p of prompts) {
       if (!p.id || !p.content || !p.group_id) continue;
@@ -106,7 +156,11 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
       await client.query(insertQuery, [p.id, p.group_id, p.content, p.data || {}]);
     }
     await client.query('COMMIT');
-    res.json({ msg: 'ok', info: `Synced ${prompts.length} prompts successfully.` });
+    res.json({ 
+      msg: 'ok', 
+      info: `Synced ${prompts.length} prompts and ${groupsSynced} groups successfully.`,
+      result: { prompts: prompts.length, groups: groupsSynced }
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('[Prompt Sync]', err);
