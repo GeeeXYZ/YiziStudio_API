@@ -1815,6 +1815,45 @@ app.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res) =>
 });
 
 // POST /toolkit/grsai — Direct Grsai API call from Toolkit (no pipeline, synchronous polling)
+app.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
+  const { prompts } = req.body;
+  if (!Array.isArray(prompts)) return res.json({ msg: 'err', info: 'Invalid data format. Expected prompts array.' });
+  
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Ensure table exists
+    await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompts" (
+      id VARCHAR(50) PRIMARY KEY,
+      group_id VARCHAR(50),
+      content TEXT,
+      data JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    for (const p of prompts) {
+      if (!p.id || !p.content || !p.group_id) continue;
+      
+      const insertQuery = `
+        INSERT INTO "yizi_prompts" (id, group_id, content, data)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (id) DO UPDATE 
+        SET content = EXCLUDED.content, group_id = EXCLUDED.group_id, data = EXCLUDED.data
+      `;
+      await client.query(insertQuery, [p.id, p.group_id, p.content, p.data || {}]);
+    }
+    await client.query('COMMIT');
+    res.json({ msg: 'ok', info: `Synced ${prompts.length} prompts successfully.` });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[Prompt Sync]', err);
+    res.json({ msg: 'err', info: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/toolkit/grsai', authenticateToken, async (req, res) => {
   const { images, prompt, model, aspectRatio, quality } = req.body;
 
