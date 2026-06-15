@@ -274,9 +274,44 @@ router.post('/client/order/get', authenticateToken, async (req, res) => {
     const result = await pool.query('SELECT * FROM "yizi_orders" WHERE id = $1', [id]);
     if (result.rows.length > 0) {
       const row = result.rows[0];
+      const formatted = formatOrderRow(row);
+      
+      // Inject comments dynamically
+      const deliveryUuids = [];
+      if (Array.isArray(formatted.data.sets)) {
+        formatted.data.sets.forEach((s, idx) => {
+          if (Array.isArray(s.delivery_imgs)) {
+            s.delivery_imgs.forEach((d, d_idx) => {
+              const dId = d.id || `img_${idx}_${d_idx}`;
+              deliveryUuids.push(dId);
+            });
+          }
+        });
+      }
+      
+      if (deliveryUuids.length > 0) {
+        const commentsRes = await pool.query('SELECT * FROM "yizi_comments" WHERE delivery_uuid = ANY($1) ORDER BY created_at ASC', [deliveryUuids]);
+        const commentsByUuid = {};
+        commentsRes.rows.forEach(c => {
+          if (!commentsByUuid[c.delivery_uuid]) commentsByUuid[c.delivery_uuid] = [];
+          commentsByUuid[c.delivery_uuid].push(c);
+        });
+        
+        formatted.data.sets.forEach((s, idx) => {
+          if (Array.isArray(s.delivery_imgs)) {
+            s.delivery_imgs.forEach((d, d_idx) => {
+              const dId = d.id || `img_${idx}_${d_idx}`;
+              if (commentsByUuid[dId]) {
+                d.comments = commentsByUuid[dId];
+              }
+            });
+          }
+        });
+      }
+
       return res.json({
         msg: 'ok',
-        result: formatOrderRow(row)
+        result: formatted
       });
     }
     res.json({ msg: 'err', info: 'Order not found' });
