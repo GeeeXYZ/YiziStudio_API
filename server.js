@@ -8,6 +8,7 @@ import Core from '@alicloud/pop-core';
 import OSS from 'ali-oss';
 import { EventEmitter } from 'events';
 import { runPipeline } from './pipeline_executor.js';
+import sharp from 'sharp';
 
 export const orderEventEmitter = new EventEmitter();
 orderEventEmitter.setMaxListeners(100);
@@ -44,6 +45,12 @@ pool.query(`
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 `).then(() => console.log('yizi_settings verified')).catch(e => console.error('DB Init Error:', e.message));
+
+// Patch yizi_comments schema safely
+pool.query(`
+    ALTER TABLE "yizi_comments" ADD COLUMN IF NOT EXISTS "name" TEXT;
+    ALTER TABLE "yizi_comments" ADD COLUMN IF NOT EXISTS "order_id" TEXT;
+`).catch(() => {});
 
 // Middleware for auth
 const authenticateToken = (req, res, next) => {
@@ -876,7 +883,8 @@ app.post('/client/order/comment', authenticateToken, async (req, res) => {
     // 3) Mark order as having comments
     await pool.query('UPDATE "yizi_orders" SET has_comments = \'1\' WHERE id = $1', [id]);
 
-    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'COMMENT_ADDED' });
+    // We removed the self-notification:
+    // orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'COMMENT_ADDED' });
 
     res.json({ msg: 'ok' });
   } catch (error) {
@@ -962,6 +970,10 @@ app.post('/client/order/confirm', authenticateToken, async (req, res) => {
 
 app.post('/client/gallery/list', authenticateToken, async (req, res) => {
   try {
+    const modelsRes = await pool.query('SELECT uuid, title FROM "yizi_model"');
+    const modelMap = {};
+    modelsRes.rows.forEach(m => modelMap[m.uuid] = m.title);
+
     const result = await pool.query(`
       SELECT g.id, g.oss_url as url, g.order_id, g.created_at, o.data as order_data 
       FROM "yizi_gallery" g 
@@ -982,7 +994,7 @@ app.post('/client/gallery/list', authenticateToken, async (req, res) => {
             url: row.url,
             orderId: row.order_id,
             date: row.created_at,
-            model: orderData.model_uuid || 'Unknown',
+            model: modelMap[orderData.model_uuid] || orderData.model_uuid || 'Unknown',
             template: orderData.planTitle || 'Unknown',
             sourceImages: orderData.sets?.[0]?.images?.filter(i=>i) || []
         };
@@ -1410,6 +1422,10 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
 
         const rawData = params.data || {};
         
+        if (db_name === 'yizi_comments' && rawData.type === 'admin') {
+            rawData.name = req.user?.account || 'Admin';
+        }
+
         // Auto-generate primary key if missing
         const pk = await getPrimaryKeyColumn(db_name);
         if (!rawData[pk] && allowedCols.includes(pk)) {
@@ -1451,6 +1467,29 @@ app.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/cl
         const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
         const query = `INSERT INTO "${db_name}" (${fields.map(f => `"${f}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
         const result = await pool.query(query, values);
+        
+        // --- yizi_comments SSE injection ---
+        if (db_name === 'yizi_comments' && result.rows.length > 0) {
+            const row = result.rows[0];
+            if (row.type === 'admin' && row.delivery_uuid) {
+                try {
+                    const orderRes = await pool.query(`SELECT id, openid FROM "yizi_orders" WHERE data::text LIKE $1 LIMIT 1`, [`%${row.delivery_uuid}%`]);
+                    if (orderRes.rows.length > 0) {
+                        const orderOpenid = orderRes.rows[0].openid;
+                        const orderId = orderRes.rows[0].id;
+                        if (orderOpenid) {
+                            orderEventEmitter.emit(`orderUpdate:${orderOpenid}`, { 
+                                orderId: orderId, 
+                                event: 'ADMIN_REPLY',
+                                comment: row
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error('[Post-insert hook] yizi_comments SSE error:', err);
+                }
+            }
+        }
         
         return res.json({ msg: 'ok', result: unpackRow(result.rows[0]) });
     }
@@ -1835,6 +1874,34 @@ app.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
     for (const p of prompts) {
       if (!p.id || !p.content || !p.group_id) continue;
       
+      // Upload base64 preview images to OSS
+      if (p.data && typeof p.data.preview_img === 'string' && p.data.preview_img.startsWith('data:image')) {
+        try {
+          const ossConfig = {
+            region: process.env.OSS_REGION,
+            accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+            accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+            bucket: process.env.OSS_BUCKET
+          };
+          const ossClient = new OSS(ossConfig);
+          const base64Data = p.data.preview_img.replace(/^data:image\/\w+;base64,/, "");
+          let buffer = Buffer.from(base64Data, 'base64');
+          
+          // Resize: max edge 600px, JPEG 85% quality
+          buffer = await sharp(buffer)
+            .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 85 })
+            .toBuffer();
+          
+          const ossPath = `prompts/preview_${p.id}_${Date.now()}.jpg`;
+          const result = await ossClient.put(ossPath, buffer);
+          p.data.preview_img = result.url.replace('http://', 'https://');
+        } catch (ossErr) {
+          console.error(`[Prompt Sync] Failed to upload preview image for prompt ${p.id}:`, ossErr.message);
+          p.data.preview_img = ''; // Remove massive base64 string on failure
+        }
+      }
+
       const insertQuery = `
         INSERT INTO "yizi_prompts" (id, group_id, content, data)
         VALUES ($1, $2, $3, $4)
