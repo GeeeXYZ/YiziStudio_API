@@ -5,6 +5,50 @@ import { runPipeline } from '../pipeline_executor.js';
 
 const router = express.Router();
 
+// Fetch default prompt from an order's workflow
+router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    let workflow_json = null;
+
+    const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [order_id]);
+    if (orderRes.rows.length > 0) {
+      const orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+      if (orderData.planId) {
+        const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+        const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [orderData.planId]);
+        if (skuRes.rows.length > 0) {
+          const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+          if (skuData.workflow) {
+            const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+            const caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+            if (caseRes.rows.length > 0) {
+               const caseData = typeof caseRes.rows[0].data === 'string' ? JSON.parse(caseRes.rows[0].data) : (caseRes.rows[0].data || {});
+               workflow_json = caseData.workflow_json || caseData;
+            }
+          }
+        }
+      }
+    }
+
+    if (!workflow_json) {
+      return res.json({ msg: 'ok', result: { prompt: '' } });
+    }
+
+    let extractedPrompt = '';
+    let wObj = typeof workflow_json === 'string' ? JSON.parse(workflow_json) : workflow_json;
+    if (wObj && Array.isArray(wObj.nodes)) {
+      const boardNode = wObj.nodes.find(n => n.type === 'prompt_board');
+      if (boardNode) extractedPrompt = boardNode.data?.prompt || '';
+    }
+
+    res.json({ msg: 'ok', result: { prompt: extractedPrompt } });
+  } catch (e) {
+    console.error('[API Pipeline] Fetch order prompt error:', e.message);
+    res.json({ msg: 'err', info: e.message });
+  }
+});
+
 // API Pipeline Execution Endpoint (manual trigger from Dashboard)
 router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
   let { workflow_json, mock_order } = req.body;
