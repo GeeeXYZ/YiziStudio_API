@@ -358,7 +358,12 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
 
         if (userModels.length > 0) {
           const inPlaceholders = userModels.map((_, i) => `$${placeholderIdx + i}`).join(', ');
-          exclusiveCondition = `(${exclusiveCondition} OR "uuid" IN (${inPlaceholders}))`;
+          let idChecks = [];
+          if (validCols.includes('uuid')) idChecks.push(`"uuid" IN (${inPlaceholders})`);
+          if (validCols.includes('id')) idChecks.push(`"id" IN (${inPlaceholders})`);
+          if (idChecks.length === 0) idChecks.push(`data->>'uuid' IN (${inPlaceholders})`);
+          
+          exclusiveCondition = `(${exclusiveCondition} OR ${idChecks.join(' OR ')})`;
           values.push(...userModels);
           placeholderIdx += userModels.length;
         }
