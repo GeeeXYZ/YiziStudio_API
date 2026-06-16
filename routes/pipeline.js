@@ -135,9 +135,24 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
 // Fetch the latest 50 API execution logs
 router.get('/api_pipeline/logs', authenticateToken, async (req, res) => {
   try {
-    const query = 'SELECT * FROM yizi_api_logs ORDER BY created_at DESC LIMIT 50';
+    // Avoid fetching massive result_images base64 data to prevent network timeouts
+    const query = `
+      SELECT 
+        id, order_id, model, status, progress, error_msg, created_at, updated_at,
+        (CASE WHEN result_images IS NOT NULL AND result_images::text != '[]' AND result_images::text != '""' AND result_images::text != 'null' THEN 1 ELSE 0 END) as has_images
+      FROM yizi_api_logs 
+      ORDER BY created_at DESC 
+      LIMIT 50
+    `;
     const result = await pool.query(query);
-    res.json({ msg: 'ok', data: result.rows });
+    const data = result.rows.map(row => {
+      const { has_images, ...rest } = row;
+      return {
+        ...rest,
+        result_images: has_images === 1 ? ['[base64_data_hidden]'] : []
+      };
+    });
+    res.json({ msg: 'ok', data });
   } catch (err) {
     console.error('[Logs Error]', err);
     res.status(500).json({ msg: 'err', info: err.message });
