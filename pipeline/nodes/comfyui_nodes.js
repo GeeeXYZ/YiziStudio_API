@@ -34,21 +34,48 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
   }
 
   let foundFetchNode = false;
-  for (const key in comfyJson) {
-    const comfyNode = comfyJson[key];
-    if (comfyNode.class_type === 'FetchImgbyURL_secured') {
-      foundFetchNode = true;
+    const directOssAddress = `https://${env.OSS_BUCKET}.${env.OSS_REGION}.aliyuncs.com`;
+    // For backend pipeline triggers, we can pass JWT_SECRET as a generic token, 
+    // or generate a signed JWT if the receiver needs real JWT. The node currently uses env.JWT_SECRET for token.
+    const pipelineToken = env.JWT_SECRET || 'YIZI_STUDIO';
+    const bearerToken = `Bearer ${pipelineToken}`;
+    const apiUrl = env.API_BASE_URL || 'http://127.0.0.1:3000';
+
+    for (const key in comfyJson) {
+      const comfyNode = comfyJson[key];
+      if (!comfyNode || !comfyNode.class_type) continue;
       if (!comfyNode.inputs) comfyNode.inputs = {};
-      comfyNode.inputs.image_url = upstreamImageUrl;
-      comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
-      comfyNode.inputs.index = orderContext.set_index || 0;
-      comfyNode.inputs.lora_prompt = loraPrompt;
-      comfyNode.inputs.prompt = orderContext.prompt || '';
-      comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
-      comfyNode.inputs.api_url = env.API_BASE_URL || 'http://127.0.0.1:3000'; 
-      comfyNode.inputs.token = env.JWT_SECRET || 'YIZI_STUDIO';
+
+      if (comfyNode.class_type === 'FetchImgbyURL_secured' || comfyNode.class_type === 'FetchImageByURL') {
+        foundFetchNode = true;
+        comfyNode.inputs.image_url = upstreamImageUrl;
+        comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
+        comfyNode.inputs.index = orderContext.set_index || 0;
+        comfyNode.inputs.lora_prompt = loraPrompt;
+        comfyNode.inputs.prompt = orderContext.prompt || '';
+        comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
+        comfyNode.inputs.api_url = apiUrl; 
+        comfyNode.inputs.token = pipelineToken;
+        comfyNode.inputs.oss_address = directOssAddress;
+        comfyNode.inputs.oss_token = bearerToken;
+      }
+      
+      if (comfyNode.class_type === 'FetchImageByUUID') {
+        comfyNode.inputs.api_url = apiUrl;
+        comfyNode.inputs.token = pipelineToken;
+      }
+
+      if (comfyNode.class_type === 'YiziStudioReceiver') {
+        if (!comfyNode._meta) comfyNode._meta = {};
+        comfyNode._meta.yizi_payload = JSON.stringify({
+          model_uuid: orderContext.model_uuid || '',
+          model_name: orderContext.model_name || '',
+          order_id: `${orderContext.openid || ''}.${orderContext.order_id || ''}`,
+        });
+        comfyNode.inputs.oss_address = directOssAddress;
+        comfyNode.inputs.oss_token = bearerToken;
+      }
     }
-  }
   
   if (!foundFetchNode) {
     console.warn(`[Pipeline] comfy_remote: FetchImgbyURL_secured node not found in workflow ${workflowId}.`);
