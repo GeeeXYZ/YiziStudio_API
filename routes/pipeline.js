@@ -139,7 +139,7 @@ router.get('/api_pipeline/logs', authenticateToken, async (req, res) => {
     const query = `
       SELECT 
         id, order_id, model, status, progress, error_msg, created_at, updated_at,
-        (CASE WHEN result_images IS NOT NULL AND result_images::text != '[]' AND result_images::text != '""' AND result_images::text != 'null' THEN 1 ELSE 0 END) as has_images
+        (CASE WHEN jsonb_typeof(result_images) = 'array' THEN (jsonb_array_length(result_images) > 0)::int ELSE 0 END) as has_images
       FROM yizi_api_logs 
       ORDER BY created_at DESC 
       LIMIT 50
