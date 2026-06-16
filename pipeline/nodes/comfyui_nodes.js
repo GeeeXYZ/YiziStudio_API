@@ -66,7 +66,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
   if (Array.isArray(customHeaders)) {
     customHeaders.forEach(h => {
       if (h && h.key && h.value) {
-        fetchHeaders[h.key.trim()] = h.value.trim();
+        fetchHeaders[h.key] = h.value;
       }
     });
   }
