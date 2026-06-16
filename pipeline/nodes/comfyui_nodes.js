@@ -9,7 +9,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
   const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflowId]);
   if (caseRes.rows.length === 0) throw new Error(`ComfyUI workflow not found: ${workflowId}`);
   const caseData = caseRes.rows[0];
-  const comfyWorkflowJsonStr = caseData.workflow_json || (typeof caseData.data === 'string' ? caseData.data : JSON.stringify(caseData.data));
+  const comfyWorkflowJsonStr = caseData.workflow_json || (caseData.data && caseData.data.workflow_json) || (typeof caseData.data === 'string' ? caseData.data : JSON.stringify(caseData.data));
   if (!comfyWorkflowJsonStr) throw new Error(`ComfyUI workflow JSON is empty for ${workflowId}`);
   
   let comfyJson;
