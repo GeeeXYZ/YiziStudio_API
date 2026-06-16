@@ -1,3 +1,5 @@
+import jwt from 'jsonwebtoken';
+
 export async function executeComfyRemote(node, inputs, orderContext, env, pool) {
   if (!pool) throw new Error('comfy_remote requires database pool to fetch workflow');
   const workflowId = node.data.workflow_uuid;
@@ -35,9 +37,12 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
 
   let foundFetchNode = false;
     const directOssAddress = `https://${env.OSS_BUCKET}.${env.OSS_REGION}.aliyuncs.com`;
-    // For backend pipeline triggers, we can pass JWT_SECRET as a generic token, 
-    // or generate a signed JWT if the receiver needs real JWT. The node currently uses env.JWT_SECRET for token.
-    const pipelineToken = env.JWT_SECRET || 'YIZI_STUDIO';
+    // For backend pipeline triggers, we must generate a valid JWT so that ComfyUI's callback requests pass authenticateToken middleware
+    const pipelineToken = jwt.sign(
+      { username: 'pipeline_bot', is_super: true, is_pipeline: true },
+      env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '1d' }
+    );
     const bearerToken = `Bearer ${pipelineToken}`;
     const apiUrl = env.API_BASE_URL || 'http://127.0.0.1:3000';
 
