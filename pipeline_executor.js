@@ -1307,7 +1307,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
   } catch (err) {
     if (pool) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [err.message, pipelineLogId]).catch(() => {});
+      const safeError = (err.message || 'Unknown Error').substring(0, 1500);
+      pool.query(`UPDATE yizi_api_logs SET status = 'failed', error_msg = $1, updated_at = NOW() WHERE id = $2`, [safeError, pipelineLogId]).catch(() => {});
     }
     console.error(`[Pipeline Error]`, err);
     return { success: false, error: err.message };
