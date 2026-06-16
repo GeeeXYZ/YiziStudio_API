@@ -24,7 +24,7 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
     if (!ossConfig.accessKeyId) return res.json({ msg: 'err', info: 'OSS Not Configured' });
     const ossClient = new OSS(ossConfig);
 
-    const { uploadToOSS } = await import('./pipeline_executor.js');
+    const { uploadToOSS } = await import('../pipeline/index.js');
     const uploadedUrls = [];
     const setIdx = parseInt(set_index) || 0;
 

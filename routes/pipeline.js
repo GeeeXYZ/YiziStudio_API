@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool, getPrimaryKeyColumn, getTableColumns } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { runPipeline } from '../pipeline_executor.js';
+import { runPipeline } from '../pipeline/index.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -210,7 +210,7 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
     const ossClient = new OSS(ossConfig);
 
     // Upload pending images
-    const { uploadToOSS } = await import('./pipeline_executor.js');
+    const { uploadToOSS } = await import('../pipeline/index.js');
     const uploadedUrls = [];
     for (const img of pendingImages) {
        try {

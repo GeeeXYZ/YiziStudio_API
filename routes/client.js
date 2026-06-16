@@ -5,7 +5,7 @@ import { pool, getPrimaryKeyColumn } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { formatOrderRow } from '../utils/helpers.js';
 import { getOSSToken } from '../utils/oss.js';
-import { runPipeline } from '../pipeline_executor.js';
+import { runPipeline } from '../pipeline/index.js';
 import { orderEventEmitter } from '../events.js';
 
 const router = express.Router();
@@ -199,7 +199,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 sku_pose_folder: resolvedPoseFolder,
                 model_uuid: data.model_uuid,
                 images: set.images || [],
-                prompt: set.extra_prompt || '',
+                prompt: set.prompt || data.prompt || set.extra_prompt || '',
                 model_name: data.model_name || '',
                 auto_delivery: skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1',
                 eventEmitter: orderEventEmitter
