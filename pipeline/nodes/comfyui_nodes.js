@@ -17,6 +17,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
   catch(e) { throw new Error(`Failed to parse ComfyUI workflow JSON: ${e.message}`); }
 
   let upstreamImageUrl = inputs.image_url || inputs.output || (Array.isArray(inputs.images) ? inputs.images[0] : inputs.images) || (Array.isArray(inputs.output_images) ? inputs.output_images[0] : inputs.output_images) || '';
+  if (Array.isArray(upstreamImageUrl)) upstreamImageUrl = upstreamImageUrl[0] || '';
   
   let loraPrompt = '';
   if (orderContext && orderContext.model_uuid) {

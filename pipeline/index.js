@@ -179,7 +179,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     const finalStatus = isOssSuccess ? `${totalNodes}/${totalNodes} 交付成功` : `${totalNodes}/${totalNodes} 异常中断`;
     if (pool) {
        await pool.query(
-         'UPDATE "yizi_api_logs" SET status = $1, progress = $2, response = $3, updated_at = NOW() WHERE id = $4',
+         'UPDATE "yizi_api_logs" SET status = $1, progress = $2, result_images = $3, updated_at = NOW() WHERE id = $4',
          [finalStatus, totalNodes, JSON.stringify({ message: "Completed", final_images: imagesToSave }), pipelineLogId]
        ).catch(() => {});
     }
@@ -245,8 +245,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     console.error(`[Pipeline] Fatal error during pipeline execution:`, error);
     if (pool && pipelineLogId) {
        pool.query(
-         'UPDATE "yizi_api_logs" SET status = $1, response = $2, updated_at = NOW() WHERE id = $3',
-         ['Failed', JSON.stringify({ error: error.message, stack: error.stack }), pipelineLogId]
+         'UPDATE "yizi_api_logs" SET status = $1, error_msg = $2, updated_at = NOW() WHERE id = $3',
+         ['Failed', error.message, pipelineLogId]
        ).catch(() => {});
     }
     return { success: false, error: error.message };
