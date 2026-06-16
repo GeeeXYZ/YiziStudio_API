@@ -724,7 +724,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                   region: process.env.OSS_REGION,
                   accessKeyId: process.env.OSS_ACCESS_KEY_ID,
                   accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
-                  bucket: process.env.OSS_BUCKET
+                  bucket: process.env.OSS_BUCKET,
+                  timeout: 300000
                 });
                 const poseFolder = orderContext.sku_pose_folder || 'poses';
                 const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
@@ -908,8 +909,14 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             const workflowId = node.data.workflow_uuid;
             if (!workflowId) throw new Error('comfy_remote node missing workflow_uuid');
             
-            // Get workflow JSON from yizi_cases
-            const caseRes = await pool.query('SELECT * FROM "yizi_cases" WHERE id = $1', [workflowId]);
+            // Get workflow JSON from yizi_cases dynamically resolving primary key (uuid or id)
+            const colsRes = await pool.query(`
+              SELECT column_name FROM information_schema.columns 
+              WHERE table_name = 'yizi_cases'
+            `);
+            const cols = colsRes.rows.map(r => r.column_name);
+            const casePk = cols.includes('uuid') ? 'uuid' : 'id';
+            const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflowId]);
             if (caseRes.rows.length === 0) throw new Error(`ComfyUI workflow not found: ${workflowId}`);
             const caseData = caseRes.rows[0];
             const comfyWorkflowJsonStr = caseData.workflow_json || (typeof caseData.data === 'string' ? caseData.data : JSON.stringify(caseData.data));
@@ -1002,7 +1009,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
               accessKeyId: process.env.OSS_ACCESS_KEY_ID,
               accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
               bucket: process.env.OSS_BUCKET,
-              secure: true
+              secure: true,
+              timeout: 300000
             };
 
             if (!ossConfig.accessKeyId) {
@@ -1137,7 +1145,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                accessKeyId: process.env.OSS_ACCESS_KEY_ID,
                accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
                bucket: process.env.OSS_BUCKET,
-               secure: true
+               secure: true,
+               timeout: 300000
            };
            if (ossConfig.accessKeyId) {
                const ossClient = new OSS(ossConfig);

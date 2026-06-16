@@ -18,7 +18,8 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
       accessKeyId: process.env.OSS_ACCESS_KEY_ID,
       accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
       bucket: process.env.OSS_BUCKET,
-      secure: true
+      secure: true,
+      timeout: 300000
     };
     if (!ossConfig.accessKeyId) return res.json({ msg: 'err', info: 'OSS Not Configured' });
     const ossClient = new OSS(ossConfig);
@@ -92,7 +93,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
               region: process.env.OSS_REGION,
               accessKeyId: process.env.OSS_ACCESS_KEY_ID,
               accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
-              bucket: process.env.OSS_BUCKET
+              bucket: process.env.OSS_BUCKET,
+              timeout: 300000
             };
             const ossClient = new OSS(ossConfig);
             
@@ -135,7 +137,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
             region: process.env.OSS_REGION,
             accessKeyId: process.env.OSS_ACCESS_KEY_ID,
             accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
-            bucket: process.env.OSS_BUCKET
+            bucket: process.env.OSS_BUCKET,
+            timeout: 300000
           };
           const ossClient = new OSS(ossConfig);
           
