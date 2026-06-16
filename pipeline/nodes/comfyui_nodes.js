@@ -54,7 +54,8 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
     console.warn(`[Pipeline] comfy_remote: FetchImgbyURL_secured node not found in workflow ${workflowId}.`);
   }
 
-  const comfyuiServerUrl = env.COMFYUI_SERVER_URL || 'http://127.0.0.1:8188';
+  let customServer = caseData.server || (caseData.data && caseData.data.server);
+  const comfyuiServerUrl = customServer || env.COMFYUI_SERVER_URL || 'http://127.0.0.1:8188';
   console.log(`[Pipeline] Triggering ComfyUI workflow at ${comfyuiServerUrl}/prompt`);
   
   const promptPayload = { prompt: comfyJson };
