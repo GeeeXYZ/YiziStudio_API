@@ -935,6 +935,21 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             // Extract image URL from upstream
             let upstreamImageUrl = inputs.image_url || inputs.output || (Array.isArray(inputs.images) ? inputs.images[0] : inputs.images) || (Array.isArray(inputs.output_images) ? inputs.output_images[0] : inputs.output_images) || '';
             
+            // Fetch Lora Prompt from yizi_model
+            let loraPrompt = '';
+            if (orderContext && orderContext.model_uuid) {
+               try {
+                  const modelRes = await pool.query('SELECT data FROM "yizi_model" WHERE uuid = $1', [orderContext.model_uuid]);
+                  if (modelRes.rows.length > 0) {
+                     const mData = modelRes.rows[0].data;
+                     const modelData = typeof mData === 'string' ? JSON.parse(mData) : mData;
+                     loraPrompt = modelData.lora_prompt || '';
+                  }
+               } catch (err) {
+                  console.warn(`[Pipeline] Failed to query lora_prompt for model ${orderContext.model_uuid}: ${err.message}`);
+               }
+            }
+
             // Find FetchImgbyURL_secured and inject variables
             let foundFetchNode = false;
             for (const key in comfyJson) {
@@ -945,7 +960,10 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                 comfyNode.inputs.image_url = upstreamImageUrl;
                 comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
                 comfyNode.inputs.index = orderContext.set_index || 0;
-                comfyNode.inputs.model_name = orderContext.model_name || '';
+                
+                // Inject model_prompt instead of model_name
+                comfyNode.inputs.model_prompt = loraPrompt;
+                
                 comfyNode.inputs.prompt = orderContext.prompt || '';
                 comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
                 
