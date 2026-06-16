@@ -61,11 +61,21 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
   const promptPayload = { prompt: comfyJson };
   if (node.data.client_id) promptPayload.client_id = node.data.client_id;
 
+  let fetchHeaders = { 'Content-Type': 'application/json' };
+  const customHeaders = caseData.headers || (caseData.data && caseData.data.headers);
+  if (Array.isArray(customHeaders)) {
+    customHeaders.forEach(h => {
+      if (h && h.key && h.value) {
+        fetchHeaders[h.key.trim()] = h.value.trim();
+      }
+    });
+  }
+
   let response;
   try {
     response = await fetch(`${comfyuiServerUrl}/prompt`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: fetchHeaders,
       body: JSON.stringify(promptPayload)
     });
   } catch (fetchErr) {
