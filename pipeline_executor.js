@@ -961,8 +961,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                 comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
                 comfyNode.inputs.index = orderContext.set_index || 0;
                 
-                // Inject model_prompt instead of model_name
-                comfyNode.inputs.model_prompt = loraPrompt;
+                // Inject lora_prompt instead of model_name
+                comfyNode.inputs.lora_prompt = loraPrompt;
                 
                 comfyNode.inputs.prompt = orderContext.prompt || '';
                 comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
