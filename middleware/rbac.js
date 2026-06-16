@@ -4,7 +4,7 @@ import { pool } from '../config/db.js';
 const checkRbacPermission = async (req, res, next) => {
   const module = req.params.module || (req.path.startsWith('/client/') ? 'client' : 'admin');
   
-  if (module === 'admin' && !req.user.is_super) {
+  if (module === 'admin' && (!req.user || !req.user.is_super)) {
     const { getActualTableName } = await import('../utils/helpers.js');
     const db_name = getActualTableName(req.params.db_name);
     const action = req.params.action;
