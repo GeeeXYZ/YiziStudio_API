@@ -511,6 +511,13 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
                                 event: 'ADMIN_REPLY',
                                 comment: row
                             });
+                            // Trigger Feishu Notification
+                            orderEventEmitter.emit('NOTIFY_NEW_COMMENT', {
+                                orderId: orderId,
+                                openid: 'admin',
+                                phone: '管理员',
+                                comment: row.comment
+                            });
                         }
                     }
                 } catch (err) {
@@ -532,10 +539,12 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
 
         // --- OSS GC (Update) ---
         let oldKeys = [];
+        let oldRowData = null;
         try {
           const oldResult = await pool.query(`SELECT * FROM "${db_name}" WHERE "${pk}" = $1`, [id]);
           if (oldResult.rows.length > 0) {
-            oldKeys = extractOSSKeys(oldResult.rows[0]);
+            oldRowData = oldResult.rows[0];
+            oldKeys = extractOSSKeys(oldRowData);
           }
         } catch (err) {
           console.error('[OSS GC] Failed to fetch old record for update', err);
@@ -586,12 +595,21 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
 
         if (db_name === 'yizi_orders' && result.rows.length > 0) {
             const rowOpenid = result.rows[0].openid;
+            const newCompleted = result.rows[0].completed === '1';
+            const oldCompleted = oldRowData ? (oldRowData.completed === '1' || oldRowData.completed === 1) : false;
+
             if (rowOpenid) {
                 orderEventEmitter.emit(`orderUpdate:${rowOpenid}`, { 
                     orderId: id, 
                     event: 'ADMIN_UPDATE',
-                    completed: result.rows[0].completed === '1'
+                    completed: newCompleted
                 });
+
+                if (newCompleted && !oldCompleted) {
+                    orderEventEmitter.emit('NOTIFY_DELIVERY_COMPLETE', {
+                        orderId: id
+                    });
+                }
             }
         }
 

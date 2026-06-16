@@ -152,6 +152,13 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
       [orderId, phone || req.user.phone || '', datetime, JSON.stringify(data), '0', '0', '0', '1', unionid]
     );
 
+    // Trigger Feishu Notification
+    orderEventEmitter.emit('NOTIFY_NEW_ORDER', {
+      orderId,
+      openid: unionid,
+      phone: phone || req.user.phone || ''
+    });
+
     // 4) Deduct points
     const nextPoints = currentPoints - totalCost;
     await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "user_id" = $2 OR "phone_number" = $3', [nextPoints.toString(), unionid, unionid]);
@@ -356,6 +363,14 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
     // We removed the self-notification:
     // orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'COMMENT_ADDED' });
 
+    // Trigger Feishu Notification
+    orderEventEmitter.emit('NOTIFY_NEW_COMMENT', {
+      orderId: id,
+      openid: req.user.unionid,
+      phone: req.user.phone || '',
+      comment
+    });
+
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -426,10 +441,17 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
       [JSON.stringify(orderData), completed, id]
     );
 
+    // 5) Trigger SSE to refresh the user's view
     orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { 
-        orderId: id, 
-        event: 'ORDER_CONFIRMED',
-        completed: completed === '1'
+      orderId: id, 
+      event: 'ORDER_CONFIRMED' 
+    });
+
+    // Trigger Feishu Notification
+    orderEventEmitter.emit('NOTIFY_ORDER_CONFIRMED', {
+      orderId: id,
+      openid: req.user.unionid,
+      phone: req.user.phone || ''
     });
 
     res.json({ msg: 'ok' });
