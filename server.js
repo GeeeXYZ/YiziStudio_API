@@ -28,6 +28,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Serve temporary images statically
+app.use('/temp_images', express.static(path.join(__dirname, 'temp_images')));
+
 // Health check / status route
 app.get('/', (req, res) => {
   res.json({

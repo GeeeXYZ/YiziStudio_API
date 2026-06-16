@@ -133,15 +133,19 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
     // Explicitly cache the consumed points on the order for accurate future refunds
     data.total_cost = totalCost;
 
-    // 2) Check user points
-    const userRes = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
+    // 2) Check user points and fetch remark
+    const userRes = await pool.query('SELECT points, remark FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
     if (userRes.rows.length === 0) {
       return res.json({ msg: 'err', info: '用户不存在' });
     }
     const currentPoints = parseFloat(userRes.rows[0].points) || 0;
+    const userRemark = userRes.rows[0].remark || '';
     if (currentPoints < totalCost) {
       return res.json({ msg: 'err', info: '扣子余额不足请充值后重试' });
     }
+
+    // Embed remark into order data
+    data.user_remark = userRemark;
 
     // 3) Create order
     const orderId = 'ord_' + crypto.randomBytes(8).toString('hex');
@@ -153,10 +157,11 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
     );
 
     // Trigger Feishu Notification
+    const displayName = userRemark ? `${userRemark} (${phone || req.user.phone || ''})` : (phone || req.user.phone || unionid);
     orderEventEmitter.emit('NOTIFY_NEW_ORDER', {
       orderId,
       openid: unionid,
-      phone: phone || req.user.phone || ''
+      phone: displayName
     });
 
     // 4) Deduct points

@@ -1,6 +1,12 @@
 import OSS from 'ali-oss';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getSetting } from './config_manager.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Parses nodes and edges into an execution graph
@@ -618,8 +624,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     if (pool) {
       await pool.query(
         `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
-         VALUES ($1, $2, $3, 'processing', 0, NOW(), NOW())`,
-        [pipelineLogId, orderContext?.order_id || 'toolkit_run', 'API Workflow']
+         VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
+        [pipelineLogId, orderContext?.order_id || 'toolkit_run', 'API Workflow', `0/${nodes.length} 任务初始化`]
       ).catch(e => console.warn('[Pipeline Log] Insert Error:', e.message));
     }
 
@@ -1089,9 +1095,23 @@ export async function runPipeline(workflowJson, orderContext, pool) {
           context[node.id] = outputs;
           completedNodes++;
           
-          if (pool && completedNodes < totalNodes) {
-             const progress = Math.floor((completedNodes / totalNodes) * 100);
-             pool.query(`UPDATE yizi_api_logs SET progress = $1, updated_at = NOW() WHERE id = $2`, [progress, pipelineLogId]).catch(() => {});
+          if (pool && completedNodes <= totalNodes) {
+             const nodeNames = {
+               order_input: '解析订单参数',
+               toolkit_input: '解析工作台参数',
+               preset_seedream: '大模型生图推理',
+               preset_apiyi: '大模型生图推理',
+               preset_grsai: '大模型生图推理',
+               comfy_remote: '投递到远程工作流',
+               oss_output: '后处理与云端上传',
+               prompt_library: '抽取提示词配置',
+               prompt_board: '构建提示词',
+               text_input: '读取配置',
+               image_preview: '获取图像'
+             };
+             const friendlyName = nodeNames[node.type] || '执行节点处理';
+             const stageText = `${completedNodes}/${totalNodes} ${friendlyName}`;
+             pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [stageText, completedNodes, pipelineLogId]).catch(() => {});
           }
           
           console.log(`[Pipeline] Node ${node.id} finished. Outputs:`, Object.keys(outputs));
@@ -1134,8 +1154,8 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       }
     }
 
-    let isOssSuccess = finalOssImages.length > 0;
-
+    let imagesToSave = isOssSuccess ? finalOssImages : [];
+    
     // Automatic Fallback Upload to OSS if oss_output node was missing or failed
     if (!isOssSuccess && rawGeneratedImages.length > 0) {
        console.log(`[Pipeline] No OSS images found. Attempting fallback upload for ${rawGeneratedImages.length} raw images.`);
@@ -1152,31 +1172,51 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                const ossClient = new OSS(ossConfig);
                for (const imgUrl of rawGeneratedImages) {
                    try {
-                       console.log(`[Pipeline] Fallback OSS Uploading ${imgUrl}`);
-                       const uploadedUrl = await uploadToOSS(ossClient, imgUrl, orderContext.openid, orderContext.order_id, orderContext.set_index || 0, `del_fallback_${Date.now()}`);
+                       console.log(`[Pipeline] Fallback OSS Uploading ${imgUrl.substring(0, 50)}...`);
+                       const uploadedUrl = await uploadToOSS(ossClient, imgUrl, orderContext.openid || 'local', orderContext.order_id || 'test', orderContext.set_index || 0, `del_fallback_${Date.now()}`);
                        finalOssImages.push(uploadedUrl.replace('http://', 'https://'));
                    } catch(e) {
-                       console.warn(`[Pipeline] Fallback OSS Upload failed for ${imgUrl}:`, e.message);
+                       console.warn(`[Pipeline] Fallback OSS Upload failed for image:`, e.message);
                    }
                }
            }
            if (finalOssImages.length > 0) {
                isOssSuccess = true;
+               imagesToSave = finalOssImages;
            }
        } catch(e) {
            console.error(`[Pipeline] Fallback OSS upload error:`, e.message);
        }
     }
 
-    let imagesToSave = isOssSuccess ? finalOssImages : rawGeneratedImages;
     let errorSuffix = '';
     
     if (!isOssSuccess && rawGeneratedImages.length > 0) {
-       errorSuffix = '注意: OSS上传失败或未执行，此为节点原始产出图';
+       errorSuffix = '注意: OSS上传失败，图片已存入本地缓冲，请点击手动兜底上传';
+       
+       const tempDir = path.join(__dirname, 'temp_images');
+       if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+       
+       for (const base64Str of rawGeneratedImages) {
+          if (typeof base64Str === 'string' && base64Str.startsWith('data:image')) {
+             const matches = base64Str.match(/^data:image\/(\w+);base64,(.+)$/);
+             if (matches) {
+               const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+               const buffer = Buffer.from(matches[2], 'base64');
+               const filename = `fallback_${pipelineLogId}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+               const filepath = path.join(tempDir, filename);
+               fs.writeFileSync(filepath, buffer);
+               imagesToSave.push(`/temp_images/${filename}`);
+             }
+          } else {
+             imagesToSave.push(base64Str);
+          }
+       }
     }
 
     if (pool) {
-      pool.query(`UPDATE yizi_api_logs SET status = 'succeeded', progress = 100, result_images = $1, error_msg = $2, updated_at = NOW() WHERE id = $3`, [JSON.stringify(imagesToSave), errorSuffix, pipelineLogId]).catch(e => console.warn(e.message));
+      const finalStatus = isOssSuccess ? `${totalNodes}/${totalNodes} 交付成功` : `${totalNodes}/${totalNodes} 异常中断`;
+      pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, result_images = $3, error_msg = $4, updated_at = NOW() WHERE id = $5`, [finalStatus, totalNodes, JSON.stringify(imagesToSave), errorSuffix, pipelineLogId]).catch(e => console.warn(e.message));
     }
 
     // === DECOUPLED DB WRITE: order update & auto delivery ===

@@ -1,9 +1,14 @@
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { pool, getPrimaryKeyColumn, getTableColumns } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { runPipeline } from '../pipeline_executor.js';
 
 const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Fetch default prompt from an order's workflow
 router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req, res) => {
@@ -135,21 +140,21 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
 // Fetch the latest 50 API execution logs
 router.get('/api_pipeline/logs', authenticateToken, async (req, res) => {
   try {
-    // Avoid fetching massive result_images base64 data to prevent network timeouts
+    // With local files, the result_images column only contains short URLs, so we can fetch directly.
     const query = `
-      SELECT 
-        id, order_id, model, status, progress, error_msg, created_at, updated_at,
-        (CASE WHEN jsonb_typeof(result_images) = 'array' THEN (jsonb_array_length(result_images) > 0)::int ELSE 0 END) as has_images
-      FROM yizi_api_logs 
+      SELECT * FROM yizi_api_logs 
       ORDER BY created_at DESC 
       LIMIT 50
     `;
     const result = await pool.query(query);
     const data = result.rows.map(row => {
-      const { has_images, ...rest } = row;
+      let images = row.result_images;
+      if (typeof images === 'string') {
+         try { images = JSON.parse(images); } catch(e) { images = []; }
+      }
       return {
-        ...rest,
-        result_images: has_images === 1 ? ['[base64_data_hidden]'] : []
+        ...row,
+        result_images: Array.isArray(images) ? images : []
       };
     });
     res.json({ msg: 'ok', data });
@@ -209,8 +214,28 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
     const uploadedUrls = [];
     for (const img of pendingImages) {
        try {
-         const secureUrl = await uploadToOSS(ossClient, img, orderInfo.openid, orderInfo.id, 0, `del_${Date.now()}`);
+         let uploadPayload = img;
+         // If it's a local temp image, convert to data URI for uploadToOSS
+         if (img.startsWith('/temp_images/')) {
+            const filepath = path.join(__dirname, '..', img);
+            if (fs.existsSync(filepath)) {
+               const buffer = fs.readFileSync(filepath);
+               const ext = path.extname(filepath).replace('.', '') || 'png';
+               uploadPayload = `data:image/${ext};base64,${buffer.toString('base64')}`;
+            } else {
+               console.warn(`Local file not found for fallback: ${filepath}`);
+               continue;
+            }
+         }
+         
+         const secureUrl = await uploadToOSS(ossClient, uploadPayload, orderInfo.openid, orderInfo.id, 0, `del_${Date.now()}`);
          uploadedUrls.push(secureUrl.replace('http://', 'https://'));
+         
+         // Optionally delete local temp file after success
+         if (img.startsWith('/temp_images/')) {
+            const filepath = path.join(__dirname, '..', img);
+            fs.unlink(filepath, (err) => { if (err) console.error(err) });
+         }
        } catch (err) {
          console.error('Fallback OSS upload failed for', img, err.message);
        }

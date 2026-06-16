@@ -9,9 +9,12 @@ import { getSetting } from '../config_manager.js';
  * @param {string} markdownText - The markdown content
  */
 async function sendFeishuCard(title, color, markdownText) {
+  console.log(`[Notification] sendFeishuCard called with title: ${title}`);
   try {
     const webhookUrl = await getSetting(pool, 'FEISHU_WEBHOOK_URL');
+    console.log(`[Notification] Fetched FEISHU_WEBHOOK_URL: ${webhookUrl}`);
     if (!webhookUrl || !webhookUrl.startsWith('http')) {
+      console.log(`[Notification] Invalid or empty webhook URL, aborting.`);
       return; // Not configured or invalid, silent ignore
     }
 
