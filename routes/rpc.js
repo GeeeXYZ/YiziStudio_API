@@ -24,8 +24,10 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
     // ----------------------------------------------------
 
     if (db_name === 'yizi_users' && action === 'topup') {
-      const { user_id, amount, remark } = params;
+      const { user_id, amount, remark, actual_payment } = params;
       const numAmount = parseFloat(amount);
+      const paymentAmount = parseInt(actual_payment) || 0;
+      
       if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无效' });
       if (!remark) return res.json({ msg: 'err', info: '充值备注不能为空' });
 
@@ -42,7 +44,8 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
           planTitle: "Admin Manual Top-up",
           type: "topup",
           remark: remark,
-          operator: req.user.account
+          operator: req.user.account,
+          actual_payment: paymentAmount
       };
 
       await pool.query('UPDATE "yizi_users" SET "points" = $1 WHERE "_id" = $2', [newPoints.toString(), user._id]);

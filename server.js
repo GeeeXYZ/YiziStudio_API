@@ -23,7 +23,7 @@ import rpcRoutes from './routes/rpc.js';
 
 const app = express();
 app.use(cors({
-  origin: [/localhost/, /zeabur\.app$/, /yizistudio/],
+  origin: [/localhost/, /zeabur\.app$/, /yizistudio/, /yizi\.studio/],
   credentials: true
 }));
 app.use(express.json());
