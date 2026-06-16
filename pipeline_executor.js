@@ -903,6 +903,77 @@ export async function runPipeline(workflowJson, orderContext, pool) {
             outputs.output = inputs.image_url || inputs.output || node.data.preview_url || '';
             break;
 
+          case 'comfy_remote': {
+            if (!pool) throw new Error('comfy_remote requires database pool to fetch workflow');
+            const workflowId = node.data.workflow_uuid;
+            if (!workflowId) throw new Error('comfy_remote node missing workflow_uuid');
+            
+            // Get workflow JSON from yizi_cases
+            const caseRes = await pool.query('SELECT * FROM "yizi_cases" WHERE id = $1', [workflowId]);
+            if (caseRes.rows.length === 0) throw new Error(`ComfyUI workflow not found: ${workflowId}`);
+            const caseData = caseRes.rows[0];
+            const comfyWorkflowJsonStr = caseData.workflow_json || (typeof caseData.data === 'string' ? caseData.data : JSON.stringify(caseData.data));
+            if (!comfyWorkflowJsonStr) throw new Error(`ComfyUI workflow JSON is empty for ${workflowId}`);
+            
+            let comfyJson;
+            try { comfyJson = JSON.parse(comfyWorkflowJsonStr); } 
+            catch(e) { throw new Error(`Failed to parse ComfyUI workflow JSON: ${e.message}`); }
+
+            // Extract image URL from upstream
+            let upstreamImageUrl = inputs.image_url || inputs.output || (Array.isArray(inputs.images) ? inputs.images[0] : inputs.images) || (Array.isArray(inputs.output_images) ? inputs.output_images[0] : inputs.output_images) || '';
+            
+            // Find FetchImgbyURL_secured and inject variables
+            let foundFetchNode = false;
+            for (const key in comfyJson) {
+              const comfyNode = comfyJson[key];
+              if (comfyNode.class_type === 'FetchImgbyURL_secured') {
+                foundFetchNode = true;
+                if (!comfyNode.inputs) comfyNode.inputs = {};
+                comfyNode.inputs.image_url = upstreamImageUrl;
+                comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
+                comfyNode.inputs.index = orderContext.set_index || 0;
+                comfyNode.inputs.model_name = orderContext.model_name || '';
+                comfyNode.inputs.prompt = orderContext.prompt || '';
+                comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
+                
+                // Fallback URL assumes frontend calls backend via same origin or standard port
+                comfyNode.inputs.api_url = process.env.API_BASE_URL || 'http://127.0.0.1:3000'; 
+                comfyNode.inputs.token = process.env.JWT_SECRET || 'YIZI_STUDIO';
+              }
+            }
+            
+            if (!foundFetchNode) {
+              console.warn(`[Pipeline] comfy_remote: FetchImgbyURL_secured node not found in workflow ${workflowId}.`);
+            }
+
+            const comfyuiServerUrl = process.env.COMFYUI_SERVER_URL || 'http://127.0.0.1:8188';
+            console.log(`[Pipeline] Triggering ComfyUI workflow at ${comfyuiServerUrl}/prompt`);
+            
+            const promptPayload = { prompt: comfyJson };
+            if (node.data.client_id) promptPayload.client_id = node.data.client_id;
+
+            const response = await fetch(`${comfyuiServerUrl}/prompt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(promptPayload)
+            });
+
+            if (!response.ok) {
+               const errorText = await response.text();
+               throw new Error(`ComfyUI API Error (${response.status}): ${errorText}`);
+            }
+
+            const responseData = await response.json();
+            console.log(`[Pipeline] ComfyUI job submitted successfully. Prompt ID: ${responseData.prompt_id}`);
+            
+            outputs.output = {
+               status: 'submitted',
+               prompt_id: responseData.prompt_id,
+               message: 'Task sent to ComfyUI successfully. It will auto-deliver when done.'
+            };
+            break;
+          }
+
           case 'oss_output': {
             // Normalize: accept images from any reasonable input key
             let rawImages = inputs.images || inputs.output_images || inputs.output || [];

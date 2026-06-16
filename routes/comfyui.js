@@ -63,4 +63,60 @@ router.post('/comfyui/order/sts', authenticateToken, async (req, res) => {
   }
 });
 
+// 7.7 ComfyUI Dedicated API: Auto-delivery webhook from ImagesUploader_secured
+router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
+  const { order_id, index, images } = req.body;
+  if (!order_id || !images || !Array.isArray(images)) {
+    return res.json({ msg: 'err', info: 'Missing required fields or invalid images format' });
+  }
+
+  // ComfyUI may pass "openid.order_id" as order_id if token generation needs it, so handle split
+  let actualOrderId = order_id;
+  if (order_id.includes('.')) {
+    actualOrderId = order_id.split('.').slice(1).join('.');
+  }
+
+  try {
+    const pgClient = await pool.connect();
+    try {
+      await pgClient.query('BEGIN');
+      const selectRes = await pgClient.query('SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [actualOrderId]);
+      
+      if (selectRes.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+
+      const orderData = selectRes.rows[0].data || {};
+      if (!orderData.sets) orderData.sets = [{}];
+      const setIndex = parseInt(index) || 0;
+      if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
+      
+      if (!orderData.sets[setIndex].delivery_imgs) {
+        orderData.sets[setIndex].delivery_imgs = [];
+      }
+
+      for (const imgUrl of images) {
+        orderData.sets[setIndex].delivery_imgs.push({
+          id: `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`,
+          img: imgUrl
+        });
+      }
+
+      await pgClient.query('UPDATE "yizi_orders" SET data = $1, updated_at = NOW() WHERE id = $2', [orderData, actualOrderId]);
+      await pgClient.query('COMMIT');
+      
+      console.log(`[ComfyUI Auto Delivery] Successfully saved ${images.length} images to order ${actualOrderId}`);
+      res.json({ msg: 'ok', info: 'Delivery success' });
+    } catch (err) {
+      await pgClient.query('ROLLBACK');
+      throw err;
+    } finally {
+      pgClient.release();
+    }
+  } catch (error) {
+    console.error('[ComfyUI Delivery Error]', error);
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
 export default router;

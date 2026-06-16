@@ -174,7 +174,7 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
 router.post('/toolkit/grsai', authenticateToken, async (req, res) => {
   const { images, prompt, model, aspectRatio, quality } = req.body;
 
-  const { getSetting } = await import('./config_manager.js');
+  const { getSetting } = await import('../config_manager.js');
   const endpoint = process.env.GRSAI_API_ENDPOINT || await getSetting(pool, 'GRSAI_API_ENDPOINT');
   const apiKey = process.env.GRSAI_API_KEY || await getSetting(pool, 'GRSAI_API_KEY');
 

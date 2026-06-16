@@ -29,7 +29,7 @@ router.post('/admin/settings', authenticateToken, async (req, res) => {
   if (!Array.isArray(settings)) return res.json({ msg: 'err', info: 'Invalid data' });
 
   try {
-    const { encrypt } = await import('./config_manager.js');
+    const { encrypt } = await import('../config_manager.js');
     for (const item of settings) {
       // If it's a masked secret, it means user didn't change it, skip.
       if (item.is_secret && typeof item.value === 'string' && item.value.startsWith('sk-****')) {
