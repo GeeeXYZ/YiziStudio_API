@@ -103,5 +103,9 @@ export async function executePromptLibrary(node, inputs, pool, executionState) {
     throw new Error(`Unknown mode ${mode} for prompt_library node`);
   }
 
-  return { prompt: selectedPromptContent, preview_img: selectedPreviewImg };
+  return { 
+    prompt: selectedPromptContent, 
+    output: selectedPromptContent, 
+    preview_img: selectedPreviewImg 
+  };
 }
