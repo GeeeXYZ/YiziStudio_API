@@ -37,15 +37,8 @@ router.post('/client/login', async (req, res) => {
         return res.json({ msg: 'err', info: '密码错误' });
       }
     } else {
-      // Auto-register new user
-      const newUserId = 'usr_' + crypto.randomBytes(8).toString('hex');
-      const defaultPoints = '1000'; // Default test points
-      await pool.query(
-        'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password") VALUES ($1, $2, $3, $4, $5)',
-        [newUserId, phone, phone, defaultPoints, hashedPassword]
-      );
-      const token = jwt.sign({ unionid: phone, phone }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '30d' });
-      return res.json({ msg: 'ok', result: { token, unionid: phone, phone } });
+      // Block unregistered users from logging in via password
+      return res.json({ msg: 'err', info: '账号不存在，请先使用验证码登录/注册' });
     }
   } catch (error) {
     console.error('[User Login Error]', error);
@@ -203,6 +196,22 @@ router.post('/client/user/phone_number/set', authenticateToken, async (req, res)
   if (!phone_number) return res.json({ msg: 'err', info: 'Phone number is required' });
   try {
     await pool.query('UPDATE "yizi_users" SET "phone_number" = $1 WHERE "user_id" = $2', [phone_number, unionid]);
+    res.json({ msg: 'ok' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
+// 4.5 Set user password
+router.post('/client/user/password/set', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  const { password } = req.body;
+  if (!password || typeof password !== 'string' || password.length > 100) {
+    return res.json({ msg: 'err', info: '密码格式错误' });
+  }
+  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+  try {
+    await pool.query('UPDATE "yizi_users" SET "password" = $1 WHERE "user_id" = $2', [hashedPassword, unionid]);
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
