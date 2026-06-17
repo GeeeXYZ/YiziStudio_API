@@ -566,6 +566,7 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
 
     // 3) Save updated data and check if completed
     // completed = ALL delivery images with content have been confirmed by the user
+    const wasCompleted = orderRes.rows[0].completed === '1';
     const completed = (totalDeliveryImages > 0 && confirmedCount >= totalDeliveryImages) ? '1' : '0';
     await pool.query(
       'UPDATE "yizi_orders" SET data = $1, completed = $2 WHERE id = $3',
@@ -578,12 +579,14 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
       event: 'ORDER_CONFIRMED' 
     });
 
-    // Trigger Feishu Notification
-    orderEventEmitter.emit('NOTIFY_ORDER_CONFIRMED', {
-      orderId: id,
-      openid: req.user.unionid,
-      phone: req.user.phone || ''
-    });
+    // Trigger Feishu Notification only when the entire order is fully confirmed for the first time
+    if (completed === '1' && !wasCompleted) {
+      orderEventEmitter.emit('NOTIFY_ORDER_CONFIRMED', {
+        orderId: id,
+        openid: req.user.unionid,
+        phone: req.user.phone || ''
+      });
+    }
 
     res.json({ msg: 'ok' });
   } catch (error) {
