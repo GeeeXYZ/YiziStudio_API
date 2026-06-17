@@ -246,7 +246,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
     if (pool && pipelineLogId) {
        pool.query(
          'UPDATE "yizi_api_logs" SET status = $1, error_msg = $2, updated_at = NOW() WHERE id = $3',
-         ['Failed', error.message, pipelineLogId]
+         ['failed', error.message, pipelineLogId]
        ).catch(() => {});
     }
     return { success: false, error: error.message };

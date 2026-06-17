@@ -26,7 +26,9 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
   
   // Random Pose Image Fetching
   outputs.random_pose_image = '';
-  if (outputs.model_uuid) {
+  if (orderContext.selectedPoseUrl) {
+    outputs.random_pose_image = orderContext.selectedPoseUrl;
+  } else if (outputs.model_uuid) {
     try {
       const ossClient = new OSS({
         region: env.OSS_REGION,

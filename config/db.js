@@ -16,6 +16,15 @@ pool.query(`
   );
 `).then(() => console.log('yizi_settings verified')).catch(e => console.error('DB Init Error:', e.message));
 
+// Initialize yizi_sms_codes
+pool.query(`
+  CREATE TABLE IF NOT EXISTS yizi_sms_codes (
+      phone VARCHAR(20) PRIMARY KEY,
+      code VARCHAR(10) NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  );
+`).catch(e => console.error('DB Init Error yizi_sms_codes:', e.message));
+
 // Patch yizi_comments schema safely
 pool.query(`
     ALTER TABLE "yizi_comments" ADD COLUMN IF NOT EXISTS "name" TEXT;

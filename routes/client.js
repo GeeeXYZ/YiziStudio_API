@@ -7,6 +7,8 @@ import { formatOrderRow } from '../utils/helpers.js';
 import { getOSSToken } from '../utils/oss.js';
 import { runPipeline } from '../pipeline/index.js';
 import { orderEventEmitter } from '../events.js';
+import OSS from 'ali-oss';
+import Core from '@alicloud/pop-core';
 
 const router = express.Router();
 
@@ -48,6 +50,120 @@ router.post('/client/login', async (req, res) => {
   } catch (error) {
     console.error('[User Login Error]', error);
     res.json({ msg: 'err', info: '登录或自动注册失败' });
+  }
+});
+
+// 1.5 Send SMS Verification Code
+router.post('/client/sms/send', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone || !/^1\d{10}$/.test(phone)) {
+    return res.json({ msg: 'err', info: '手机号格式错误' });
+  }
+
+  // Generate 6 digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+  try {
+    await pool.query(
+      `INSERT INTO "yizi_sms_codes" (phone, code, created_at) 
+       VALUES ($1, $2, CURRENT_TIMESTAMP) 
+       ON CONFLICT (phone) DO UPDATE SET code = EXCLUDED.code, created_at = CURRENT_TIMESTAMP`,
+      [phone, code]
+    );
+
+    const accessKeyId = process.env.SMS_ACCESS_KEY_ID || process.env.OSS_ACCESS_KEY_ID;
+    const accessKeySecret = process.env.SMS_ACCESS_KEY_SECRET || process.env.OSS_ACCESS_KEY_SECRET;
+    
+    // Fetch SMS_SIGN_NAME and SMS_TEMPLATE_CODE from yizi_settings if not in env
+    let signName = process.env.SMS_SIGN_NAME;
+    let templateCode = process.env.SMS_TEMPLATE_CODE;
+
+    if (!signName || !templateCode) {
+      const settingsRes = await pool.query('SELECT key, value FROM "yizi_settings" WHERE key IN ($1, $2)', ['SMS_SIGN_NAME', 'SMS_TEMPLATE_CODE']);
+      settingsRes.rows.forEach(r => {
+        if (r.key === 'SMS_SIGN_NAME') signName = r.value;
+        if (r.key === 'SMS_TEMPLATE_CODE') templateCode = r.value;
+      });
+    }
+
+    if (!signName || !templateCode || !accessKeyId || !accessKeySecret) {
+      console.log(`[Mock SMS] Sending to ${phone}: ${code}`);
+      return res.json({ msg: 'ok', info: 'Mock: 短信发送成功' });
+    }
+
+    // Call Aliyun SMS API
+    const client = new Core({
+      accessKeyId,
+      accessKeySecret,
+      endpoint: 'https://dysmsapi.aliyuncs.com',
+      apiVersion: '2017-05-25'
+    });
+
+    const params = {
+      "RegionId": "cn-hangzhou",
+      "PhoneNumbers": phone,
+      "SignName": signName,
+      "TemplateCode": templateCode,
+      "TemplateParam": JSON.stringify({ code })
+    };
+
+    const requestOption = {
+      method: 'POST',
+      formatParams: false
+    };
+
+    await client.request('SendSms', params, requestOption);
+    res.json({ msg: 'ok', info: '短信发送成功' });
+  } catch (error) {
+    console.error('[SMS Send Error]', error);
+    res.json({ msg: 'err', info: '短信发送失败，请稍后重试' });
+  }
+});
+
+// 1.6 Login with SMS Verification Code
+router.post('/client/sms/login', async (req, res) => {
+  const { phone, code } = req.body;
+  if (!phone || !code) return res.json({ msg: 'err', info: '手机号和验证码不能为空' });
+
+  try {
+    const codeRes = await pool.query('SELECT code, created_at FROM "yizi_sms_codes" WHERE phone = $1', [phone]);
+    if (codeRes.rows.length === 0) return res.json({ msg: 'err', info: '请先获取验证码' });
+
+    const record = codeRes.rows[0];
+    if (record.code !== code) return res.json({ msg: 'err', info: '验证码错误' });
+
+    // Check expiration (5 minutes = 300000 ms)
+    const now = new Date();
+    const createdAt = new Date(record.created_at);
+    if (now - createdAt > 300000) {
+      return res.json({ msg: 'err', info: '验证码已过期' });
+    }
+
+    // Code is valid, delete it
+    await pool.query('DELETE FROM "yizi_sms_codes" WHERE phone = $1', [phone]);
+
+    // Check if user exists
+    const userRes = await pool.query('SELECT * FROM "yizi_users" WHERE "phone_number" = $1', [phone]);
+    let user;
+    if (userRes.rows.length > 0) {
+      user = userRes.rows[0];
+    } else {
+      // Auto-register
+      const newUserId = 'usr_' + crypto.randomBytes(8).toString('hex');
+      const randomPassword = crypto.createHash('sha256').update(crypto.randomBytes(16)).digest('hex');
+      const defaultPoints = '1000';
+      await pool.query(
+        'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password") VALUES ($1, $2, $3, $4, $5)',
+        [newUserId, newUserId, phone, defaultPoints, randomPassword]
+      );
+      user = { user_id: newUserId, phone_number: phone };
+    }
+
+    const token = jwt.sign({ unionid: user.user_id, phone }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '30d' });
+    return res.json({ msg: 'ok', result: { token, unionid: user.user_id, phone } });
+  } catch (error) {
+    console.error('[SMS Login Error]', error);
+    res.json({ msg: 'err', info: '登录失败，请稍后重试' });
   }
 });
 
@@ -198,6 +314,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 set_index: index,
                 sku_pose_folder: resolvedPoseFolder,
                 model_uuid: data.model_uuid,
+                selectedPoseUrl: set.selectedPoseUrl || '',
                 images: set.images || [],
                 prompt: set.prompt || data.prompt || set.extra_prompt || '',
                 model_name: data.model_name || '',
