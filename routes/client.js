@@ -109,7 +109,7 @@ router.post('/client/sms/send', async (req, res) => {
     res.json({ msg: 'ok', info: '短信发送成功' });
   } catch (error) {
     console.error('[SMS Send Error]', error);
-    res.json({ msg: 'err', info: '短信发送失败，请稍后重试' });
+    res.json({ msg: 'err', info: '发送报错: ' + (error.data ? JSON.stringify(error.data) : error.message) });
   }
 });
 

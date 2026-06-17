@@ -18,22 +18,35 @@ async function sendFeishuCard(title, color, markdownText) {
       return; // Not configured or invalid, silent ignore
     }
 
-    const payload = {
-      msg_type: 'interactive',
-      card: {
-        config: { wide_screen_mode: true },
-        header: {
-          title: { tag: 'plain_text', content: title },
-          template: color
-        },
-        elements: [
-          {
-            tag: 'markdown',
-            content: markdownText
-          }
-        ]
-      }
-    };
+    const isDingTalk = webhookUrl.includes('dingtalk.com');
+    let payload;
+
+    if (isDingTalk) {
+      payload = {
+        msgtype: 'markdown',
+        markdown: {
+          title: title,
+          text: `### ${title}\n\n${markdownText}`
+        }
+      };
+    } else {
+      payload = {
+        msg_type: 'interactive',
+        card: {
+          config: { wide_screen_mode: true },
+          header: {
+            title: { tag: 'plain_text', content: title },
+            template: color
+          },
+          elements: [
+            {
+              tag: 'markdown',
+              content: markdownText
+            }
+          ]
+        }
+      };
+    }
 
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -43,7 +56,7 @@ async function sendFeishuCard(title, color, markdownText) {
     });
 
     if (!res.ok) {
-      console.error(`[Notification] Feishu Webhook failed: ${res.statusText}`);
+      console.error(`[Notification] Webhook failed: ${res.statusText}`);
     }
   } catch (err) {
     console.error(`[Notification] Feishu Webhook error: ${err.message}`);
