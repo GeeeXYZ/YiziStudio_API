@@ -385,10 +385,11 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
       const pk = await getPrimaryKeyColumn(db_name);
       // Allow caller to specify sort column; fallback to pk
       const orderByCol = params.sort_by || pk;
+      const sortDir = (params.sort_dir && params.sort_dir.toUpperCase() === 'ASC') ? 'ASC' : 'DESC';
       
       const limitIdx = placeholderIdx;
       const offsetIdx = placeholderIdx + 1;
-      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${orderByCol}" DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${orderByCol}" ${sortDir} LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
       const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
       
       let listData = result.rows.map(unpackRow);
