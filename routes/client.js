@@ -205,12 +205,32 @@ router.post('/client/user/phone_number/set', authenticateToken, async (req, res)
 // 4.5 Set user password
 router.post('/client/user/password/set', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
-  const { password } = req.body;
-  if (!password || typeof password !== 'string' || password.length > 100) {
-    return res.json({ msg: 'err', info: '密码格式错误' });
+  const { old_password, new_password } = req.body;
+  
+  if (!new_password || typeof new_password !== 'string' || new_password.length > 100 || new_password.length < 6) {
+    return res.json({ msg: 'err', info: '新密码格式错误，长度必须在6-100位之间' });
   }
-  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+
   try {
+    const userQuery = await pool.query('SELECT password FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
+    if (userQuery.rows.length === 0) {
+      return res.json({ msg: 'err', info: '用户不存在' });
+    }
+    
+    const currentPasswordHash = userQuery.rows[0].password;
+    
+    // 如果用户提供了旧密码，则必须验证
+    // (由于部分老用户可能是系统生成的随机密码且未提供其他找回途径，为了防止功能锁死，如果在已知没有旧密码等情况下可在此处拓展免密逻辑。当前严格按需校验)
+    if (!old_password) {
+      return res.json({ msg: 'err', info: '请输入旧密码' });
+    }
+    
+    const oldPasswordHash = crypto.createHash('sha256').update(old_password).digest('hex');
+    if (oldPasswordHash !== currentPasswordHash) {
+      return res.json({ msg: 'err', info: '旧密码错误' });
+    }
+
+    const hashedPassword = crypto.createHash('sha256').update(new_password).digest('hex');
     await pool.query('UPDATE "yizi_users" SET "password" = $1 WHERE "user_id" = $2', [hashedPassword, unionid]);
     res.json({ msg: 'ok' });
   } catch (error) {

@@ -80,22 +80,39 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
   
   if (!workflow_json && mock_order?.order_id) {
     try {
-      // Lookup the order's planId (SKU) to find the default workflow
-      const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [mock_order.order_id]);
+      // Lookup the order's planId (SKU) to find the default workflow and populate order context
+      const orderRes = await pool.query('SELECT * FROM "yizi_orders" WHERE id = $1', [mock_order.order_id]);
       if (orderRes.rows.length > 0) {
-        const orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+        const row = orderRes.rows[0];
+        const orderData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+        
+        // Populate missing order details into mock_order
+        mock_order.openid = mock_order.openid || row.openid;
+        mock_order.model_uuid = mock_order.model_uuid || orderData.model_uuid;
+        mock_order.model_name = mock_order.model_name || orderData.model_name;
+        mock_order.prompt = mock_order.prompt || orderData.prompt;
+        
+        const setIndex = mock_order.set_index || 0;
+        if (orderData.sets && orderData.sets[setIndex]) {
+          mock_order.images = mock_order.images || orderData.sets[setIndex].images || [];
+          mock_order.selectedPoseUrl = mock_order.selectedPoseUrl || orderData.sets[setIndex].selectedPoseUrl;
+        }
+
         if (orderData.planId) {
           const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
           const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [orderData.planId]);
           if (skuRes.rows.length > 0) {
             const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+            
+            mock_order.sku_pose_folder = mock_order.sku_pose_folder || skuData.poseFolder || 'poses';
+            
             if (skuData.workflow) {
               const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
               const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
               if (caseRes.rows.length > 0) {
-                 const row = caseRes.rows[0];
-                 const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
-                 workflow_json = row.workflow_json || caseData.workflow_json || caseData;
+                 const caseRow = caseRes.rows[0];
+                 const caseData = typeof caseRow.data === 'string' ? JSON.parse(caseRow.data) : (caseRow.data || {});
+                 workflow_json = caseRow.workflow_json || caseData.workflow_json || caseData;
               }
             }
           }

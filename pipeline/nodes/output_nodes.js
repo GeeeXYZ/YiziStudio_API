@@ -11,7 +11,8 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   const orderInfo = inputs.order_info || orderContext;
   
   console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
-  console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
+  console.log(`[Pipeline] OSS Output: orderInfo =`, orderInfo, `orderContext =`, orderContext);
+  console.log(`[Pipeline] OSS Output: inputs.order_info type =`, typeof inputs.order_info, `isArray =`, Array.isArray(inputs.order_info));
   
   if (!filteredImages.length) {
      const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
@@ -20,6 +21,7 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   }
 
   if (!orderInfo || !orderInfo.openid || !orderInfo.order_id) {
+     console.error(`[Pipeline] OSS Output Node missing valid order_info! inputs.order_info=`, inputs.order_info, `orderContext=`, orderContext);
      throw new Error(`OSS Output Node missing valid order_info (openid, order_id)`);
   }
 
