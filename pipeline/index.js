@@ -195,7 +195,11 @@ export async function runPipeline(workflowJson, orderContext, pool) {
        ).catch(() => {});
     }
 
-    if (orderContext && orderContext.isRealOrder && orderContext.order_id) {
+    const isWritebackEligible = orderContext && orderContext.order_id 
+      && orderContext.order_id !== 'toolkit_run'
+      && orderContext.order_id !== 'unknown'
+      && !orderContext.order_id.startsWith('test_order_');
+    if (isWritebackEligible) {
        const orderInputNode = Object.values(context).find(c => c.random_pose_image);
        if (finalOssImages.length > 0 || allFailedUploads.length > 0 || (orderInputNode && orderInputNode.random_pose_image)) {
          try {
@@ -221,21 +225,25 @@ export async function runPipeline(workflowJson, orderContext, pool) {
                  orderData.sets[setIndex].upload_errors = allFailedUploads.map(f => ({ source: f.sourceUrl?.substring(0, 200), error: f.error, time: new Date().toISOString() }));
                }
 
-               if (finalOssImages.length > 0 && orderContext.auto_delivery) {
-                 if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
-                 for (const imgUrl of finalOssImages) {
-                   orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
-                 }
-                 nextWaitDelivery = '0'; 
+               if (finalOssImages.length > 0) {
+                  if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
+                  for (const imgUrl of finalOssImages) {
+                    orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
+                  }
+                  console.log(`[Pipeline] Writing ${finalOssImages.length} images to order ${orderContext.order_id} set ${setIndex}`);
 
-                 if (orderContext.eventEmitter) {
-                   try {
-                     orderContext.eventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length });
-                   } catch (sseErr) {}
-                 }
-               }
+                  // Only flip wait_delivery and fire SSE if auto_delivery is enabled
+                  if (orderContext.auto_delivery) {
+                    nextWaitDelivery = '0';
+                    if (orderContext.eventEmitter) {
+                      try {
+                        orderContext.eventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length });
+                      } catch (sseErr) {}
+                    }
+                  }
+                }
 
-               await pgClient.query('UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', [JSON.stringify(orderData), nextWaitDelivery, orderContext.order_id]);
+                await pgClient.query('UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', [JSON.stringify(orderData), nextWaitDelivery, orderContext.order_id]);
              }
              await pgClient.query('COMMIT');
            } catch (txErr) {

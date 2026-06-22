@@ -1,50 +1,60 @@
 import { pool } from './config/db.js';
 
 async function investigate() {
-  // Find logs for this specific order
+  // Get the last 5 pipeline logs
   const logRes = await pool.query(
-    `SELECT id, order_id, model, status, progress, error_msg, result_images, created_at, updated_at
-     FROM yizi_api_logs 
-     WHERE order_id = 'ord_64b284ea764435aa'
+    `SELECT id, order_id, status, progress, error_msg, 
+            result_images,
+            created_at, updated_at
+     FROM yizi_api_logs
      ORDER BY created_at DESC LIMIT 5`
   );
   
-  console.log(`=== Found ${logRes.rows.length} logs for ord_64b284ea764435aa ===`);
+  console.log(`=== Last 5 API Logs ===\n`);
   for (const row of logRes.rows) {
-    console.log(`\n--- Log ID: ${row.id} ---`);
-    console.log(`  status: ${row.status}`);
-    console.log(`  progress: ${row.progress}`);
-    console.log(`  error_msg: ${row.error_msg || '(none)'}`);
+    console.log(`--- ${row.id} ---`);
+    console.log(`  order_id:   ${row.order_id}`);
+    console.log(`  status:     ${row.status}`);
+    console.log(`  progress:   ${row.progress}`);
+    console.log(`  error_msg:  ${row.error_msg || '(none)'}`);
     console.log(`  created_at: ${row.created_at}`);
     console.log(`  updated_at: ${row.updated_at}`);
     
-    let images = row.result_images;
-    if (typeof images === 'string') {
-      try { images = JSON.parse(images); } catch(e) {}
+    let ri = row.result_images;
+    if (typeof ri === 'string') { try { ri = JSON.parse(ri); } catch(e){} }
+    if (ri && ri.final_images) {
+      console.log(`  final_images count: ${ri.final_images.length}`);
+      if (ri.final_images.length > 0) console.log(`  first image: ${ri.final_images[0]?.substring(0, 120)}`);
+    } else {
+      console.log(`  result_images: ${ri ? JSON.stringify(ri).substring(0, 200) : 'NULL'}`);
     }
-    console.log(`  result_images type: ${typeof images}, isArray: ${Array.isArray(images)}`);
-    if (images) console.log(`  result_images: ${JSON.stringify(images).substring(0, 800)}`);
-    else console.log(`  result_images: NULL`);
+    console.log('');
   }
-  
-  // Also check the order to see if data has delivery_imgs
+
+  // Check the specific order's delivery_imgs
   const orderRes = await pool.query(
-    `SELECT id, openid, completed, wait_delivery, data FROM yizi_orders WHERE id = 'ord_64b284ea764435aa'`
+    `SELECT id, openid, completed, wait_delivery, data 
+     FROM yizi_orders 
+     WHERE id = 'ord_64b284ea764435aa'`
   );
   if (orderRes.rows.length > 0) {
-    const order = orderRes.rows[0];
-    const data = order.data || {};
-    console.log('\n=== Order ===');
-    console.log(`  openid: ${order.openid}`);
-    console.log(`  completed: ${order.completed}`);
-    console.log(`  wait_delivery: ${order.wait_delivery}`);
-    if (data.sets && data.sets[0]) {
-      const set0 = data.sets[0];
-      console.log(`  sets[0] delivery_imgs count: ${set0.delivery_imgs?.length || 0}`);
-      console.log(`  sets[0] upload_errors: ${JSON.stringify(set0.upload_errors)?.substring(0, 500)}`);
+    const o = orderRes.rows[0];
+    const d = o.data || {};
+    console.log(`=== Order ord_64b284ea764435aa ===`);
+    console.log(`  openid: ${o.openid}, completed: ${o.completed}, wait_delivery: ${o.wait_delivery}`);
+    console.log(`  data.workflow: ${d.workflow}`);
+    if (d.sets) {
+      for (let i = 0; i < d.sets.length; i++) {
+        const s = d.sets[i];
+        console.log(`  sets[${i}].delivery_imgs count: ${s.delivery_imgs?.length || 0}`);
+        console.log(`  sets[${i}].upload_errors: ${JSON.stringify(s.upload_errors || null)?.substring(0, 300)}`);
+        if (s.delivery_imgs && s.delivery_imgs.length > 0) {
+          console.log(`    first delivery: ${s.delivery_imgs[0].img?.substring(0, 120)}`);
+        }
+      }
+    } else {
+      console.log(`  data.sets: undefined`);
     }
-  } else {
-    console.log('\n=== Order NOT FOUND ===');
   }
 
   process.exit(0);
