@@ -29,6 +29,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
            const mData = modelRes.rows[0].data;
            const modelData = typeof mData === 'string' ? JSON.parse(mData) : mData;
            loraPrompt = modelData.lora_prompt || '';
+           orderContext.modelData = modelData;
         }
      } catch (err) {
         console.warn(`[Pipeline] Failed to query lora_prompt for model ${orderContext.model_uuid}: ${err.message}`);
@@ -75,6 +76,9 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
         comfyNode._meta.yizi_payload = JSON.stringify({
           model_uuid: orderContext.model_uuid || '',
           model_name: orderContext.model_name || '',
+          model_avatar: orderContext.modelData?.imgs?.[0] || orderContext.modelData?.main_img || '',
+          model_full_body: orderContext.modelData?.imgs?.[1] || orderContext.modelData?.main_img || '',
+          model_special_pose: orderContext.modelData?.special_poses?.[0] || '',
           order_id: `${orderContext.openid || ''}.${orderContext.order_id || ''}`,
           real_openid: orderContext.openid || 'unknown',
           real_order_id: orderContext.order_id || 'unknown',
