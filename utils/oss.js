@@ -36,7 +36,10 @@ async function getOSSToken(openid = null, order_id = null) {
           {
             Effect: 'Allow',
             Action: ['oss:PutObject', 'oss:GetObject'],
-            Resource: [`acs:oss:*:*:${bucket}/delivery_imgs/${openid}/${order_id}/*`]
+            Resource: [
+              `acs:oss:*:*:${bucket}/delivery_imgs/${openid}/${order_id}/*`,
+              `acs:oss:*:*:${bucket}/delivery_imgs/${openid}.${order_id}/*`
+            ]
           }
         ]
       };
