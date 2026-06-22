@@ -62,14 +62,15 @@ export async function executePromptLibrary(node, inputs, pool, executionState) {
       throw new Error(`Prompt with ID ${promptId} not found in database.`);
     }
   } else if (mode === 'random') {
-    const groupId = inputs.group_id || node.data.group_id;
-    if (!groupId) throw new Error('prompt_library node missing group_id for random mode');
+    // Fallback to group_id for backward compatibility with old workflows
+    const setId = inputs.set_id || node.data.set_id || inputs.group_id || node.data.group_id;
+    if (!setId) throw new Error('prompt_library node missing set_id for random mode');
     if (!pool) throw new Error('Database pool not available for prompt_library node execution');
 
     const unlock = await executionState.promptLibraryMutex.lock();
     try {
-      let query = 'SELECT id, content, data FROM "yizi_prompts" WHERE group_id = $1';
-      let params = [groupId];
+      let query = 'SELECT id, content, data FROM "yizi_prompts" WHERE set_id = $1';
+      let params = [setId];
       
       if (executionState.usedPromptIds.length > 0) {
         const placeholders = executionState.usedPromptIds.map((_, i) => `$${i + 2}`).join(',');
@@ -85,14 +86,14 @@ export async function executePromptLibrary(node, inputs, pool, executionState) {
         selectedPreviewImg = res.rows[0].data?.preview_img || '';
         executionState.usedPromptIds.push(res.rows[0].id);
       } else {
-        console.warn(`[Pipeline] All unused prompts in group ${groupId} exhausted. Allowing repeats as fallback.`);
-        const fallbackRes = await pool.query('SELECT id, content, data FROM "yizi_prompts" WHERE group_id = $1 ORDER BY RANDOM() LIMIT 1', [groupId]);
+        console.warn(`[Pipeline] All unused prompts in set ${setId} exhausted. Allowing repeats as fallback.`);
+        const fallbackRes = await pool.query('SELECT id, content, data FROM "yizi_prompts" WHERE set_id = $1 ORDER BY RANDOM() LIMIT 1', [setId]);
         if (fallbackRes.rows.length > 0) {
           selectedPromptContent = fallbackRes.rows[0].content;
           selectedPreviewImg = fallbackRes.rows[0].data?.preview_img || '';
           executionState.usedPromptIds.push(fallbackRes.rows[0].id);
         } else {
-          throw new Error(`No prompts found in group ${groupId}.`);
+          throw new Error(`No prompts found in set ${setId}.`);
         }
       }
     } finally {

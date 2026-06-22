@@ -50,42 +50,96 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
 
 // POST /toolkit/grsai — Direct Grsai API call from Toolkit (no pipeline, synchronous polling)
 router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
-  const { prompts, groups } = req.body;
+  const { groups, sets, prompts } = req.body;
   if (!Array.isArray(prompts)) return res.json({ msg: 'err', info: 'Invalid data format. Expected prompts array.' });
   
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     
+    // Database schema migration
+    // Step 1: Check if old yizi_prompt_groups exists and needs renaming to yizi_prompt_sets
+    const tableCheckRes = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'yizi_prompt_groups'
+      ) as exists
+    `);
+    
+    const setsCheckRes = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'yizi_prompt_sets'
+      ) as exists
+    `);
+    
+    if (tableCheckRes.rows[0].exists && !setsCheckRes.rows[0].exists) {
+      console.log('[Prompt Sync] Performing schema migration: renaming yizi_prompt_groups to yizi_prompt_sets');
+      await client.query(`ALTER TABLE "yizi_prompt_groups" RENAME TO "yizi_prompt_sets"`);
+      await client.query(`ALTER TABLE "yizi_prompt_sets" ADD COLUMN IF NOT EXISTS group_id VARCHAR(50)`);
+      
+      const promptsCheckRes = await client.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name='yizi_prompts' and column_name='group_id'
+      `);
+      if (promptsCheckRes.rows.length > 0) {
+        await client.query(`ALTER TABLE "yizi_prompts" RENAME COLUMN group_id TO set_id`);
+      }
+    }
+    
     // Ensure tables exist
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompt_groups" (
-      id VARCHAR(50) PRIMARY KEY,
-      title VARCHAR(100),
+      id VARCHAR(255) PRIMARY KEY,
+      name VARCHAR(255),
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    
+    await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompt_sets" (
+      id VARCHAR(255) PRIMARY KEY,
+      group_id VARCHAR(255),
+      title VARCHAR(255),
       data JSONB,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
     
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompts" (
-      id VARCHAR(50) PRIMARY KEY,
-      group_id VARCHAR(50),
+      id VARCHAR(255) PRIMARY KEY,
+      set_id VARCHAR(255),
       content TEXT,
       data JSONB,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // Phase 1: UPSERT Groups
     let groupsSynced = 0;
     if (Array.isArray(groups)) {
       for (const g of groups) {
-        if (!g.id || !g.title) continue;
+        if (!g.id || !g.name) continue;
+        const insertGroupQuery = `
+          INSERT INTO "yizi_prompt_groups" (id, name)
+          VALUES ($1, $2)
+          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+        `;
+        await client.query(insertGroupQuery, [g.id, g.name]);
+        groupsSynced++;
+      }
+    }
 
-        if (g.data && typeof g.data.cover_img === 'string' && g.data.cover_img.startsWith('data:image')) {
-          const base64Data = g.data.cover_img.replace(/^data:image\/\w+;base64,/, "");
+    // Phase 2: UPSERT Sets
+    let setsSynced = 0;
+    if (Array.isArray(sets)) {
+      for (const s of sets) {
+        if (!s.id || !s.name) continue;
+
+        if (s.data && typeof s.data.cover_img === 'string' && s.data.cover_img.startsWith('data:image')) {
+          const base64Data = s.data.cover_img.replace(/^data:image\/\w+;base64,/, "");
           let buffer = Buffer.from(base64Data, 'base64');
           
           const sharp = (await import('sharp')).default;
           const metadata = await sharp(buffer).metadata();
           if (metadata.width > 600 || metadata.height > 600) {
-            throw new Error(`分类库 [${g.title || g.id}] 的封面图尺寸过大 (${metadata.width}x${metadata.height})，请在前端将其压缩至最大边不大于600px后再同步。`);
+            throw new Error(`图集 [${s.name || s.id}] 的封面图尺寸过大 (${metadata.width}x${metadata.height})，请在前端将其压缩至最大边不大于600px后再同步。`);
           }
 
           try {
@@ -98,28 +152,32 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
             };
             const ossClient = new OSS(ossConfig);
             
-            const ossPath = `prompts/group_cover_${g.id}_${Date.now()}.${metadata.format || 'jpg'}`;
+            // Clean up id for filename to prevent folder structure issues in OSS
+            const safeId = s.id.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            const ossPath = `prompts/set_cover_${safeId}_${Date.now()}.${metadata.format || 'jpg'}`;
             const result = await ossClient.put(ossPath, buffer);
-            g.data.cover_img = result.url.replace('http://', 'https://');
+            s.data.cover_img = result.url.replace('http://', 'https://');
           } catch (ossErr) {
-            console.error(`[Prompt Sync] Failed to upload cover image for group ${g.id}:`, ossErr.message);
-            g.data.cover_img = ''; // Remove massive base64 string on failure
+            console.error(`[Prompt Sync] Failed to upload cover image for set ${s.id}:`, ossErr.message);
+            s.data.cover_img = ''; 
           }
         }
 
-        const insertQuery = `
-          INSERT INTO "yizi_prompt_groups" (id, title, data)
-          VALUES ($1, $2, $3)
+        const insertSetQuery = `
+          INSERT INTO "yizi_prompt_sets" (id, group_id, title, data)
+          VALUES ($1, $2, $3, $4)
           ON CONFLICT (id) DO UPDATE 
-          SET title = EXCLUDED.title, data = EXCLUDED.data
+          SET group_id = EXCLUDED.group_id, title = EXCLUDED.title, data = EXCLUDED.data
         `;
-        await client.query(insertQuery, [g.id, g.title, g.data || {}]);
-        groupsSynced++;
+        const groupId = s.group_id || "";
+        await client.query(insertSetQuery, [s.id, groupId, s.name, s.data || {}]);
+        setsSynced++;
       }
     }
 
+    // Phase 3: UPSERT Prompts
     for (const p of prompts) {
-      if (!p.id || !p.content || !p.group_id) continue;
+      if (!p.id || !p.content || !p.set_id) continue;
       
       // Upload base64 preview images to OSS
       if (p.data && typeof p.data.preview_img === 'string' && p.data.preview_img.startsWith('data:image')) {
@@ -147,23 +205,24 @@ router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
           p.data.preview_img = result.url.replace('http://', 'https://');
         } catch (ossErr) {
           console.error(`[Prompt Sync] Failed to upload preview image for prompt ${p.id}:`, ossErr.message);
-          p.data.preview_img = ''; // Remove massive base64 string on failure
+          p.data.preview_img = '';
         }
       }
 
-      const insertQuery = `
-        INSERT INTO "yizi_prompts" (id, group_id, content, data)
+      const insertPromptQuery = `
+        INSERT INTO "yizi_prompts" (id, set_id, content, data)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (id) DO UPDATE 
-        SET content = EXCLUDED.content, group_id = EXCLUDED.group_id, data = EXCLUDED.data
+        SET content = EXCLUDED.content, set_id = EXCLUDED.set_id, data = EXCLUDED.data
       `;
-      await client.query(insertQuery, [p.id, p.group_id, p.content, p.data || {}]);
+      await client.query(insertPromptQuery, [p.id, p.set_id, p.content, p.data || {}]);
     }
+    
     await client.query('COMMIT');
     res.json({ 
       msg: 'ok', 
-      info: `Synced ${prompts.length} prompts and ${groupsSynced} groups successfully.`,
-      result: { prompts: prompts.length, groups: groupsSynced }
+      info: `Synced ${groupsSynced} groups, ${setsSynced} sets, and ${prompts.length} prompts successfully.`,
+      result: { groups: groupsSynced, sets: setsSynced, prompts: prompts.length }
     });
   } catch (err) {
     await client.query('ROLLBACK');
