@@ -39,7 +39,7 @@ export async function executeSeedream(node, inputs, env, pool) {
         base64Images.push(url);
       } else {
         try {
-          const resp = await fetch(url);
+          const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
           if (!resp.ok) continue;
           const arrayBuffer = await resp.arrayBuffer();
           let buffer = Buffer.from(arrayBuffer);
@@ -220,7 +220,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
       try {
-        const imgRes = await fetch(imgUrl);
+        const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(60000) });
         if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
         const imgBlob = await imgRes.blob();
         let ext = 'png';

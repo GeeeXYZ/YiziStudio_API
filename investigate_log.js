@@ -1,61 +1,84 @@
 import { pool } from './config/db.js';
 
 async function investigate() {
-  // Get the last 5 pipeline logs
-  const logRes = await pool.query(
-    `SELECT id, order_id, status, progress, error_msg, 
-            result_images,
-            created_at, updated_at
-     FROM yizi_api_logs
-     ORDER BY created_at DESC LIMIT 5`
-  );
+  // Find the workflow for this order's SKU
+  const orderRes = await pool.query(`SELECT data FROM yizi_orders WHERE id = 'ord_3803a67cdcb21d58'`);
+  if (orderRes.rows.length === 0) { console.log('Order not found'); process.exit(1); }
+  const orderData = orderRes.rows[0].data || {};
+  console.log(`planId: ${orderData.planId}`);
+
+  // Get SKU
+  const skuRes = await pool.query(`SELECT data FROM yizi_sku WHERE id = $1`, [orderData.planId]);
+  if (skuRes.rows.length === 0) { console.log('SKU not found'); process.exit(1); }
+  const skuData = skuRes.rows[0].data || {};
+  console.log(`workflow uuid: ${skuData.workflow}`);
+  console.log(`workflow_type: ${skuData.workflow_type}`);
+  console.log(`auto_trigger: ${skuData.auto_trigger}`);
+
+  if (!skuData.workflow) { console.log('No workflow assigned'); process.exit(0); }
+
+  // Get workflow
+  const caseRes = await pool.query(`SELECT uuid, title, data FROM yizi_cases WHERE uuid = $1`, [skuData.workflow]);
+  if (caseRes.rows.length === 0) { console.log('Workflow not found'); process.exit(1); }
+  const c = caseRes.rows[0];
+  const cData = typeof c.data === 'string' ? JSON.parse(c.data) : (c.data || {});
+  const wfJson = cData.workflow_json || cData;
   
-  console.log(`=== Last 5 API Logs ===\n`);
-  for (const row of logRes.rows) {
-    console.log(`--- ${row.id} ---`);
-    console.log(`  order_id:   ${row.order_id}`);
-    console.log(`  status:     ${row.status}`);
-    console.log(`  progress:   ${row.progress}`);
-    console.log(`  error_msg:  ${row.error_msg || '(none)'}`);
-    console.log(`  created_at: ${row.created_at}`);
-    console.log(`  updated_at: ${row.updated_at}`);
-    
-    let ri = row.result_images;
-    if (typeof ri === 'string') { try { ri = JSON.parse(ri); } catch(e){} }
-    if (ri && ri.final_images) {
-      console.log(`  final_images count: ${ri.final_images.length}`);
-      if (ri.final_images.length > 0) console.log(`  first image: ${ri.final_images[0]?.substring(0, 120)}`);
-    } else {
-      console.log(`  result_images: ${ri ? JSON.stringify(ri).substring(0, 200) : 'NULL'}`);
-    }
-    console.log('');
+  console.log(`\nWorkflow: ${c.title} (${c.uuid})`);
+  
+  let wf;
+  try { wf = typeof wfJson === 'string' ? JSON.parse(wfJson) : wfJson; } 
+  catch(e) { console.log('Failed to parse workflow_json'); process.exit(1); }
+  
+  if (!wf || !wf.nodes) { console.log('No nodes in workflow'); process.exit(1); }
+
+  console.log(`\n=== Workflow Nodes (${wf.nodes.length} total) ===`);
+  for (const n of wf.nodes) {
+    const dataKeys = Object.keys(n.data || {}).join(', ');
+    console.log(`  [${n.id}] type=${n.type} | data keys: ${dataKeys}`);
   }
 
-  // Check the specific order's delivery_imgs
-  const orderRes = await pool.query(
-    `SELECT id, openid, completed, wait_delivery, data 
-     FROM yizi_orders 
-     WHERE id = 'ord_64b284ea764435aa'`
-  );
-  if (orderRes.rows.length > 0) {
-    const o = orderRes.rows[0];
-    const d = o.data || {};
-    console.log(`=== Order ord_64b284ea764435aa ===`);
-    console.log(`  openid: ${o.openid}, completed: ${o.completed}, wait_delivery: ${o.wait_delivery}`);
-    console.log(`  data.workflow: ${d.workflow}`);
-    if (d.sets) {
-      for (let i = 0; i < d.sets.length; i++) {
-        const s = d.sets[i];
-        console.log(`  sets[${i}].delivery_imgs count: ${s.delivery_imgs?.length || 0}`);
-        console.log(`  sets[${i}].upload_errors: ${JSON.stringify(s.upload_errors || null)?.substring(0, 300)}`);
-        if (s.delivery_imgs && s.delivery_imgs.length > 0) {
-          console.log(`    first delivery: ${s.delivery_imgs[0].img?.substring(0, 120)}`);
-        }
-      }
-    } else {
-      console.log(`  data.sets: undefined`);
+  console.log(`\n=== Edges (${wf.edges.length} total) ===`);
+  for (const e of wf.edges) {
+    console.log(`  ${e.source} (${e.sourceHandle || 'output'}) --> ${e.target} (${e.targetHandle || 'input'})`);
+  }
+
+  // Now simulate topoSort to see execution order
+  const nodeMap = {};
+  const inEdges = {};
+  const outEdges = {};
+  for (const n of wf.nodes) {
+    nodeMap[n.id] = n;
+    inEdges[n.id] = [];
+    outEdges[n.id] = [];
+  }
+  for (const e of wf.edges) {
+    if (nodeMap[e.source] && nodeMap[e.target]) {
+      outEdges[e.source].push(e);
+      inEdges[e.target].push(e);
     }
   }
+  
+  const sorted = [];
+  const visited = new Set();
+  const visiting = new Set();
+  function visit(id) {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error('Cycle at ' + id);
+    visiting.add(id);
+    for (const e of outEdges[id]) visit(e.target);
+    visiting.delete(id);
+    visited.add(id);
+    sorted.unshift(id);
+  }
+  for (const id of Object.keys(nodeMap)) visit(id);
+
+  console.log(`\n=== Topo-sorted execution order ===`);
+  sorted.forEach((id, i) => {
+    const n = nodeMap[id];
+    const deps = [...new Set(inEdges[id].map(e => e.source))];
+    console.log(`  Step ${i+1}: [${n.type}] id=${id} | depends on: ${deps.length > 0 ? deps.map(d => nodeMap[d]?.type + '(' + d + ')').join(', ') : 'none'}`);
+  });
 
   process.exit(0);
 }

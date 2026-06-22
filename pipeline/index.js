@@ -125,7 +125,24 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       });
     }
 
-    const allResults = await Promise.allSettled(Object.values(nodePromises));
+    // Global pipeline timeout: 10 minutes. Prevents infinite hangs.
+    const PIPELINE_TIMEOUT_MS = 10 * 60 * 1000;
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error(`Pipeline 全局超时 (${PIPELINE_TIMEOUT_MS/1000}秒)，可能有节点无响应挂起。`)), PIPELINE_TIMEOUT_MS)
+    );
+    
+    let allResults;
+    try {
+      allResults = await Promise.race([
+        Promise.allSettled(Object.values(nodePromises)),
+        timeoutPromise.then(() => { throw new Error('timeout'); })
+      ]);
+    } catch (timeoutErr) {
+      // Global timeout hit — treat all incomplete nodes as failed
+      console.error(`[Pipeline] GLOBAL TIMEOUT after ${PIPELINE_TIMEOUT_MS/1000}s`);
+      allResults = Object.values(nodePromises).map(() => ({ status: 'rejected', reason: timeoutErr }));
+    }
+    
     const failures = allResults.filter(r => r.status === 'rejected');
     let pipelineError = null;
     if (failures.length > 0) {
