@@ -8,20 +8,20 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   
   const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
   const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
-  let orderInfo = inputs.order_info || orderContext || {};
-
+  const orderInfo = inputs.order_info || orderContext;
+  
   console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
-  console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo.openid, order_id: orderInfo.order_id, set_index: orderInfo.set_index, isRealOrder: orderContext?.isRealOrder }));
-
+  console.log(`[Pipeline] OSS Output: orderInfo =`, JSON.stringify({ openid: orderInfo?.openid, order_id: orderInfo?.order_id, set_index: orderInfo?.set_index, isRealOrder: orderContext?.isRealOrder }));
+  
   if (!filteredImages.length) {
      const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
      console.error(`[Pipeline] OSS Output: No valid images to upload. ${debugInfo}`);
      throw new Error(`OSS Output 节点未收到任何有效图片。请检查上游生图节点的连线是否正确。Debug: ${debugInfo}`);
   }
 
-  // Fallback for toolkit test runs
-  if (!orderInfo.openid) orderInfo.openid = 'test_user';
-  if (!orderInfo.order_id) orderInfo.order_id = `test_order_${Date.now()}`;
+  if (!orderInfo || !orderInfo.openid || !orderInfo.order_id) {
+     throw new Error(`OSS Output Node missing valid order_info (openid, order_id)`);
+  }
 
   const ossConfig = {
     region: env.OSS_REGION,
