@@ -76,7 +76,13 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
           model_uuid: orderContext.model_uuid || '',
           model_name: orderContext.model_name || '',
           order_id: `${orderContext.openid || ''}.${orderContext.order_id || ''}`,
+          real_openid: orderContext.openid || 'unknown',
+          real_order_id: orderContext.order_id || 'unknown',
+          set_index: orderContext.set_index || 0
         });
+        comfyNode.inputs.openid = orderContext.openid || 'unknown';
+        comfyNode.inputs.order_id = orderContext.order_id || 'unknown';
+        comfyNode.inputs.set_index = orderContext.set_index || 0;
         comfyNode.inputs.oss_address = directOssAddress;
         comfyNode.inputs.oss_token = bearerToken;
       }
