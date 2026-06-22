@@ -127,9 +127,12 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
     const allResults = await Promise.allSettled(Object.values(nodePromises));
     const failures = allResults.filter(r => r.status === 'rejected');
+    let pipelineError = null;
     if (failures.length > 0) {
       console.error(`[Pipeline] ${failures.length} node(s) failed during concurrent execution.`);
-      throw failures[0].reason;
+      for (const f of failures) console.error(`  - ${f.reason?.message || f.reason}`);
+      // Don't throw immediately — let post-processing collect any successful results first
+      pipelineError = failures[0].reason;
     }
 
     let finalOssImages = [];
@@ -176,11 +179,19 @@ export async function runPipeline(workflowJson, orderContext, pool) {
        }
     }
 
-    const finalStatus = isOssSuccess ? `${totalNodes}/${totalNodes} 交付成功` : `${totalNodes}/${totalNodes} 异常中断`;
+    let finalStatus;
+    if (isOssSuccess && !pipelineError) {
+      finalStatus = `${totalNodes}/${totalNodes} 交付成功`;
+    } else if (isOssSuccess && pipelineError) {
+      finalStatus = `${totalNodes}/${totalNodes} 部分完成(已交付)`;
+    } else {
+      finalStatus = `${totalNodes}/${totalNodes} 异常中断`;
+    }
+    const errorMsgToSave = pipelineError ? pipelineError.message : null;
     if (pool) {
        await pool.query(
-         'UPDATE "yizi_api_logs" SET status = $1, progress = $2, result_images = $3, updated_at = NOW() WHERE id = $4',
-         [finalStatus, totalNodes, JSON.stringify({ message: "Completed", final_images: imagesToSave }), pipelineLogId]
+         'UPDATE "yizi_api_logs" SET status = $1, progress = $2, result_images = $3, error_msg = COALESCE($5, error_msg), updated_at = NOW() WHERE id = $4',
+         [finalStatus, totalNodes, JSON.stringify({ message: "Completed", final_images: imagesToSave }), pipelineLogId, errorMsgToSave]
        ).catch(() => {});
     }
 
@@ -237,6 +248,18 @@ export async function runPipeline(workflowJson, orderContext, pool) {
            console.error('[Pipeline] Failed to update order in database:', dbErr);
          }
        }
+    }
+
+    // If some nodes failed but we still managed to collect/upload images, return partial success
+    if (pipelineError && !isOssSuccess) {
+      // Nothing was salvageable, treat as full failure
+      console.error(`[Pipeline] All nodes failed and no images were collected. Throwing.`);
+      throw pipelineError;
+    }
+
+    if (pipelineError) {
+      console.warn(`[Pipeline] Partial failure: ${failures.length} node(s) failed, but ${imagesToSave.length} images were saved successfully.`);
+      return { success: true, partial: true, images: imagesToSave, failed_uploads: allFailedUploads, error: pipelineError.message };
     }
 
     return { success: true, images: imagesToSave, failed_uploads: allFailedUploads };
