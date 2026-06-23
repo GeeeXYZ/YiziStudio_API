@@ -144,7 +144,7 @@ router.post('/client/sms/login', async (req, res) => {
       // Auto-register
       const newUserId = 'usr_' + crypto.randomBytes(8).toString('hex');
       const randomPassword = crypto.createHash('sha256').update(crypto.randomBytes(16)).digest('hex');
-      const defaultPoints = '1000';
+      const defaultPoints = '240';
       await pool.query(
         'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password") VALUES ($1, $2, $3, $4, $5)',
         [newUserId, newUserId, phone, defaultPoints, randomPassword]
