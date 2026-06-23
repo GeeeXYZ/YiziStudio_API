@@ -26,7 +26,8 @@ app.use(cors({
   origin: [/localhost/, /zeabur\.app$/, /yizistudio/, /yizi\.studio/],
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 import path from 'path';
 import { fileURLToPath } from 'url';
