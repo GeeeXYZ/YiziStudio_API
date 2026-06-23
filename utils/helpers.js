@@ -31,11 +31,13 @@ function unpackRow(row) {
       try {
         const parsed = JSON.parse(row.data);
         Object.assign(row, parsed);
+        row.data = parsed; // Retain the nested object
       } catch (e) {}
     } else if (typeof row.data === 'object') {
       Object.assign(row, row.data);
+      // Retain the nested object
     }
-    delete row.data;
+    // We intentionally DO NOT delete row.data here anymore so frontend can use item.data.*
   }
   return row;
 }
