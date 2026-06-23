@@ -2,11 +2,12 @@ import express from 'express';
 import crypto from 'crypto';
 import { pool } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { checkPermission } from '../middleware/rbac.js';
 
 const router = express.Router();
 
 // GET /admin/settings
-router.get('/admin/settings', authenticateToken, async (req, res) => {
+router.get('/admin/settings', authenticateToken, checkPermission('settings:read'), async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value, is_secret, updated_at FROM yizi_settings');
     const settings = result.rows.map(row => {
@@ -24,7 +25,7 @@ router.get('/admin/settings', authenticateToken, async (req, res) => {
 });
 
 // POST /admin/settings
-router.post('/admin/settings', authenticateToken, async (req, res) => {
+router.post('/admin/settings', authenticateToken, checkPermission('settings:write'), async (req, res) => {
   const { settings } = req.body; // Array of {key, value, is_secret}
   if (!Array.isArray(settings)) return res.json({ msg: 'err', info: 'Invalid data' });
 

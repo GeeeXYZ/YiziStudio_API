@@ -35,4 +35,32 @@ const checkRbacPermission = async (req, res, next) => {
   next();
 };
 
-export { checkRbacPermission };
+const checkPermission = (requiredPermission) => {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ msg: 'err', info: 'Unauthorized' });
+    }
+    if (req.user.is_super) {
+      return next(); // Superadmin bypasses specific permission checks
+    }
+    if (!req.user.role_id) {
+      return res.status(403).json({ msg: 'err', info: 'Forbidden: 账号未分配任何角色权限' });
+    }
+    try {
+      const roleRes = await pool.query('SELECT permissions FROM "yizi_roles" WHERE id = $1', [req.user.role_id]);
+      let userPerms = [];
+      if (roleRes.rows.length > 0 && roleRes.rows[0].permissions) {
+        userPerms = typeof roleRes.rows[0].permissions === 'string' ? JSON.parse(roleRes.rows[0].permissions) : roleRes.rows[0].permissions;
+      }
+      if (!userPerms.includes(requiredPermission)) {
+        return res.status(403).json({ msg: 'err', info: `Forbidden: 缺少必需权限 [${requiredPermission}]` });
+      }
+      next();
+    } catch (err) {
+      console.error('[checkPermission Error]', err);
+      return res.status(500).json({ msg: 'err', info: '内部服务器错误' });
+    }
+  };
+};
+
+export { checkRbacPermission, checkPermission };

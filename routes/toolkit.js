@@ -2,6 +2,7 @@ import express from 'express';
 import OSS from 'ali-oss';
 import { pool } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { checkPermission } from '../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -49,7 +50,7 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
 });
 
 // POST /toolkit/grsai — Direct Grsai API call from Toolkit (no pipeline, synchronous polling)
-router.post('/toolkit/prompts/sync', authenticateToken, async (req, res) => {
+router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts:write'), async (req, res) => {
   const { groups, sets, prompts } = req.body;
   if (!Array.isArray(prompts)) return res.json({ msg: 'err', info: 'Invalid data format. Expected prompts array.' });
   
