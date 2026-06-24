@@ -8,16 +8,16 @@ const router = express.Router();
 
 // 1. HTTP POST: /admin/login
 router.post('/admin/login', async (req, res) => {
-  const { account, password } = req.body;
+  const { email, password } = req.body;
   
-  if (!account || !password) {
-    return res.json({ msg: 'err', info: '账号和密码不能为空' });
+  if (!email || !password) {
+    return res.json({ msg: 'err', info: '邮箱地址和密码不能为空' });
   }
 
   const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
 
   try {
-    const result = await pool.query('SELECT * FROM "yizi_admins" WHERE "account" = $1', [account]);
+    const result = await pool.query('SELECT * FROM "yizi_admins" WHERE "email" = $1', [email]);
     if (result.rows.length > 0) {
       const adminUser = result.rows[0];
       if (adminUser.password === hashedPassword) {
@@ -30,8 +30,8 @@ router.post('/admin/login', async (req, res) => {
             visible_projects = typeof roleRes.rows[0].visible_projects === 'string' ? JSON.parse(roleRes.rows[0].visible_projects || '[]') : (roleRes.rows[0].visible_projects || []);
           }
         }
-        const token = jwt.sign({ account, is_super: adminUser.is_super, role_id: adminUser.role_id }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
-        return res.json({ msg: 'ok', result: { token, account, is_super: adminUser.is_super, role_id: adminUser.role_id, permissions, visible_projects } });
+        const token = jwt.sign({ email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
+        return res.json({ msg: 'ok', result: { token, email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id, permissions, visible_projects } });
       }
     }
     res.json({ msg: 'err', info: '用户名或密码错误' });
@@ -51,15 +51,15 @@ router.post('/admin/check', authenticateToken, (req, res) => {
 
 router.post('/admin/reset_psw', authenticateToken, async (req, res) => {
   const { oldpwd, newpwd } = req.body;
-  const account = req.user.account;
+  const email = req.user.email || req.user.account; // fallback for older tokens
   const oldHashed = crypto.createHash('sha256').update(oldpwd).digest('hex');
   const newHashed = crypto.createHash('sha256').update(newpwd).digest('hex');
   try {
-    const result = await pool.query('SELECT password FROM "yizi_admins" WHERE account = $1', [account]);
+    const result = await pool.query('SELECT password FROM "yizi_admins" WHERE email = $1', [email]);
     if (result.rows.length === 0 || result.rows[0].password !== oldHashed) {
       return res.json({ msg: 'err', info: '旧密码错误' });
     }
-    await pool.query('UPDATE "yizi_admins" SET password = $1 WHERE account = $2', [newHashed, account]);
+    await pool.query('UPDATE "yizi_admins" SET password = $1 WHERE email = $2', [newHashed, email]);
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -69,7 +69,7 @@ router.post('/admin/reset_psw', authenticateToken, async (req, res) => {
 // Admin management APIs
 router.post('/admin_list', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, account, email, is_super, role_id, data, created_at FROM "yizi_admins" ORDER BY id ASC');
+    const result = await pool.query('SELECT id, email, is_super, role_id, data, created_at FROM "yizi_admins" ORDER BY id ASC');
     res.json({ msg: 'ok', result: result.rows });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -84,10 +84,10 @@ router.post('/admin_add', authenticateToken, requireSuperAdmin, async (req, res)
   const hashedPassword = crypto.createHash('sha256').update(tempPassword).digest('hex');
   try {
     await pool.query(
-      'INSERT INTO "yizi_admins" (account, password, email, is_super) VALUES ($1, $2, $3, $4)',
-      [account, hashedPassword, email, false]
+      'INSERT INTO "yizi_admins" (password, email, is_super) VALUES ($1, $2, $3)',
+      [hashedPassword, email, false]
     );
-    res.json({ msg: 'ok', info: `已成功创建管理员：${account}，默认密码为：123456` });
+    res.json({ msg: 'ok', info: `已成功创建管理员：${email}，默认密码为：123456` });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
