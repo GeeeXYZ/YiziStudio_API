@@ -374,6 +374,52 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
         whereClauses.push(exclusiveCondition);
       }
 
+      if (module === 'client' && db_name === 'yizi_sku') {
+        let userTemplates = [];
+        if (req.user) {
+          try {
+            const userRes = await pool.query('SELECT * FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1', [req.user.unionid || req.user.phone]);
+            if (userRes.rows.length > 0) {
+              const u = userRes.rows[0];
+              let uData = {};
+              if (typeof u.data === 'string') {
+                try { uData = JSON.parse(u.data); } catch(e) {}
+              } else if (u.data) {
+                uData = u.data;
+              }
+              const exclusiveStr = u.exclusive_templates || uData.exclusive_templates;
+              if (exclusiveStr) {
+                userTemplates = exclusiveStr.split(',').filter(Boolean);
+              }
+            }
+          } catch(e) {
+            console.error('[Client SKU List Filter Error]', e);
+          }
+        }
+        
+        const validCols = await getTableColumns(db_name);
+        let exclusiveCondition = '';
+        if (validCols.includes('is_exclusive')) {
+          exclusiveCondition = `("is_exclusive" IS NULL OR "is_exclusive" = false OR "is_exclusive"::text = 'false' OR "is_exclusive"::text = '0')`;
+        } else {
+          exclusiveCondition = `(data->>'is_exclusive' IS NULL OR data->>'is_exclusive' = 'false' OR data->>'is_exclusive' = '0')`;
+        }
+
+        if (userTemplates.length > 0) {
+          const inPlaceholders = userTemplates.map((_, i) => `$${placeholderIdx + i}`).join(', ');
+          let idChecks = [];
+          if (validCols.includes('uuid')) idChecks.push(`"uuid" IN (${inPlaceholders})`);
+          if (validCols.includes('id')) idChecks.push(`"id" IN (${inPlaceholders})`);
+          if (idChecks.length === 0) idChecks.push(`data->>'uuid' IN (${inPlaceholders})`);
+          
+          exclusiveCondition = `(${exclusiveCondition} OR ${idChecks.join(' OR ')})`;
+          values.push(...userTemplates);
+          placeholderIdx += userTemplates.length;
+        }
+        
+        whereClauses.push(exclusiveCondition);
+      }
+
       const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
       
       // Get total count
