@@ -557,6 +557,7 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
                                 orderId: orderId, 
                                 event: 'ADMIN_REPLY',
                                 comment: row
+                            });
                         }
                     }
                 } catch (err) {

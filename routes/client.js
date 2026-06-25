@@ -501,6 +501,30 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
     const deliveryImg = orderData.sets?.[index]?.delivery_imgs?.[delivery_index];
     const deliveryUuid = deliveryImg?.id || `img_${index}_${delivery_index}`;
     
+    // 1.5) Calculate remake cost and check points
+    const unionid = req.user.unionid;
+    const commentsRes = await pool.query('SELECT type FROM "yizi_comments" WHERE delivery_uuid = $1', [deliveryUuid]);
+    const previousCount = commentsRes.rows.filter(c => c.type === 'user').length;
+    
+    let cost = 80;
+    if (previousCount === 0) cost = 1;
+    else if (previousCount === 1) cost = 5;
+    else if (previousCount === 2) cost = 10;
+    else if (previousCount === 3) cost = 20;
+    else if (previousCount === 4) cost = 40;
+
+    const userRes = await pool.query('SELECT points FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [unionid, unionid]);
+    if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存在' });
+    
+    const currentPoints = parseFloat(userRes.rows[0].points) || 0;
+    if (currentPoints < cost) {
+      return res.json({ msg: 'err', info: '积分余额不足以支付本次重新拍摄' });
+    }
+
+    // Deduct points
+    const nextPoints = currentPoints - cost;
+    await pool.query('UPDATE "yizi_users" SET points = $1 WHERE "user_id" = $2 OR "phone_number" = $3', [nextPoints.toString(), unionid, unionid]);
+
     // 2) Write comment
     const commentId = 'cmt_' + crypto.randomBytes(8).toString('hex');
     await pool.query(
