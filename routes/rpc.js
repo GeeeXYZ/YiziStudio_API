@@ -557,14 +557,6 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
                                 orderId: orderId, 
                                 event: 'ADMIN_REPLY',
                                 comment: row
-                            });
-                            // Trigger Feishu Notification
-                            orderEventEmitter.emit('NOTIFY_NEW_COMMENT', {
-                                orderId: orderId,
-                                openid: 'admin',
-                                phone: '管理员',
-                                comment: row.comment
-                            });
                         }
                     }
                 } catch (err) {
