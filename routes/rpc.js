@@ -639,10 +639,25 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
             const oldCompleted = oldRowData ? (oldRowData.completed === '1' || oldRowData.completed === 1) : false;
 
             if (rowOpenid) {
+                // Find new delivery_imgs IDs
+                const freshDeliveryIds = [];
+                try {
+                    const oldData = typeof oldRowData?.data === 'string' ? JSON.parse(oldRowData.data) : (oldRowData?.data || {});
+                    const newData = typeof result.rows[0].data === 'string' ? JSON.parse(result.rows[0].data) : (result.rows[0].data || {});
+                    
+                    const oldIds = new Set();
+                    (oldData.sets || []).forEach(s => (s.delivery_imgs || []).forEach(d => d.id && oldIds.add(d.id)));
+                    
+                    (newData.sets || []).forEach(s => (s.delivery_imgs || []).forEach(d => {
+                        if (d.id && !oldIds.has(d.id)) freshDeliveryIds.push(d.id);
+                    }));
+                } catch(e) {}
+
                 orderEventEmitter.emit(`orderUpdate:${rowOpenid}`, { 
                     orderId: id, 
                     event: 'ADMIN_UPDATE',
-                    completed: newCompleted
+                    completed: newCompleted,
+                    freshDeliveryIds
                 });
 
                 if (newCompleted && !oldCompleted) {

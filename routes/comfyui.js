@@ -95,9 +95,12 @@ router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
         orderData.sets[setIndex].delivery_imgs = [];
       }
 
+      const newDeliveryIds = [];
       for (const imgUrl of images) {
+        const id = `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`;
+        newDeliveryIds.push(id);
         orderData.sets[setIndex].delivery_imgs.push({
-          id: `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`,
+          id,
           img: imgUrl
         });
       }
@@ -110,7 +113,7 @@ router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
       // Notify Feishu and Frontend SSE
       import('../events.js').then(({ orderEventEmitter }) => {
         orderEventEmitter.emit('NOTIFY_DELIVERY_COMPLETE', { orderId: actualOrderId });
-        orderEventEmitter.emit(`orderUpdate:${row.openid}`, { orderId: actualOrderId, event: 'DELIVERY_UPDATE' });
+        orderEventEmitter.emit(`orderUpdate:${row.openid}`, { orderId: actualOrderId, event: 'DELIVERY_UPDATE', freshDeliveryIds: newDeliveryIds });
       }).catch(err => console.error('[Pipeline] Failed to load event emitter:', err));
 
       res.json({ msg: 'ok', info: 'Delivery success' });
