@@ -307,7 +307,7 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
       }
 
       const page = params.page || params._page || 1;
-      const pageSize = params.page_size || params._page_size || 10;
+      const pageSize = params.page_size || params._page_size || params.limit || 10;
       
       const conditions = params.conditions || params._conditions || {};
       const whereClauses = [];
