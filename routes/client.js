@@ -507,7 +507,7 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
     const previousCount = commentsRes.rows.filter(c => c.type === 'user').length;
     
     let cost = 80;
-    if (previousCount === 0) cost = 1;
+    if (previousCount === 0) cost = 0;
     else if (previousCount === 1) cost = 5;
     else if (previousCount === 2) cost = 10;
     else if (previousCount === 3) cost = 20;
