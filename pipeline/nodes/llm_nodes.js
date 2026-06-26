@@ -9,7 +9,7 @@ export async function executePromptBoard(node, inputs, orderContext) {
   let prompt = [incomingText, basePrompt].filter(s => typeof s === 'string' && s.trim() !== '').join('\n');
   
   if (orderContext && orderContext.workflow_override_prompt) {
-    prompt = orderContext.workflow_override_prompt;
+    prompt = [prompt, orderContext.workflow_override_prompt].filter(s => typeof s === 'string' && s.trim() !== '').join(', ');
   }
   return { prompt: prompt, output: prompt };
 }

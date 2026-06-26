@@ -675,4 +675,49 @@ router.post('/client/gallery/list', authenticateToken, async (req, res) => {
   }
 });
 
+// Fetch prompts bound to a SKU (for slash commands)
+router.post('/client/sku/prompts', authenticateToken, async (req, res) => {
+  try {
+    const { planId } = req.body;
+    if (!planId) return res.json({ msg: 'err', info: 'Missing planId' });
+
+    const skuRes = await pool.query('SELECT data FROM yizi_sku WHERE id = $1', [planId]);
+    if (skuRes.rows.length === 0) return res.json({ msg: 'err', info: 'SKU not found' });
+    
+    const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+    const promptSetIdsStr = skuData.prompt_set_ids || skuData.prompt_set_id; // backward compatible
+    if (!promptSetIdsStr) return res.json({ msg: 'ok', result: [] }); // No prompt library bound
+    
+    const setIds = String(promptSetIdsStr).split(',').filter(Boolean);
+    if (setIds.length === 0) return res.json({ msg: 'ok', result: [] });
+
+    const resultList = [];
+    
+    for (const setId of setIds) {
+      const setRes = await pool.query('SELECT title FROM yizi_prompt_sets WHERE id = $1', [setId]);
+      if (setRes.rows.length === 0) continue;
+      const setTitle = setRes.rows[0].title;
+      
+      const promptRes = await pool.query('SELECT id, content, data FROM yizi_prompts WHERE set_id = $1 ORDER BY id DESC', [setId]);
+      const prompts = promptRes.rows.map(r => {
+          const pData = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
+          return {
+              id: r.id,
+              title: pData.title || r.id,
+              description: pData.description || '',
+              preview_img: pData.preview_img || '',
+              content: r.content || ''
+          };
+      });
+      if (prompts.length > 0) {
+        resultList.push({ set_id: setId, set_title: setTitle, prompts });
+      }
+    }
+    
+    res.json({ msg: 'ok', result: resultList });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
 export default router;
