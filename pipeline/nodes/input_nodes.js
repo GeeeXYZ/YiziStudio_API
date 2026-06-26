@@ -21,7 +21,11 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
       set_index: orderContext.set_index || 0
     },
     model_name: orderContext.model_name || '',
-    model_uuid: orderContext.model_uuid || ''
+    model_uuid: orderContext.model_uuid || '',
+    prompt_slot_1: orderContext.prompt_slot_1 || '',
+    prompt_slot_2: orderContext.prompt_slot_2 || '',
+    prompt_slot_3: orderContext.prompt_slot_3 || '',
+    prompt_slot_4: orderContext.prompt_slot_4 || ''
   };
   
   // Random Pose Image Fetching

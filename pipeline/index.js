@@ -10,8 +10,11 @@ import { uploadToOSS } from './core/oss_helper.js';
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
 export { uploadToOSS };
 
-export async function runPipeline(workflowJson, orderContext, pool) {
+export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
+  const { simulate = false } = options;
   const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const traceLogs = [];
+
   try {
     const parsedData = typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson;
     const { nodes, edges } = parsedData;
@@ -20,7 +23,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       throw new Error("Invalid workflow data: Missing 'nodes' or 'edges' arrays");
     }
 
-    if (pool) {
+    if (pool && !simulate) {
       await pool.query(
         `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
          VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
@@ -52,7 +55,7 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       }
     };
 
-    console.log(`[Pipeline] Starting CONCURRENT execution of ${totalNodes} nodes...`);
+    console.log(`[Pipeline] Starting CONCURRENT execution of ${totalNodes} nodes... (Simulate: ${simulate})`);
     const nodePromises = {};
 
     for (const nodeId of sortedNodeIds) {
@@ -68,41 +71,56 @@ export async function runPipeline(workflowJson, orderContext, pool) {
 
         console.log(`[Pipeline] Executing node: ${node.type} (${node.id})`);
         const inputs = resolveInputs(incomingEdges, context);
-
         let outputs = {};
-        switch (node.type) {
-          case 'toolkit_input': outputs = await executeToolkitInput(node, inputs, orderContext, process.env, pool); break;
-          case 'order_input': outputs = await executeOrderInput(node, inputs, orderContext, process.env, pool); break;
-          
-          case 'preset_seedream':
-          case 'seedream': outputs = await executeSeedream(node, inputs, process.env, pool); break;
-          
-          case 'preset_apiyi': outputs = await executeApiyiPreset(node, inputs, process.env, pool, orderContext); break;
-          case 'preset_grsai': outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext); break;
-          case 'preset_openrouter': outputs = await executeOpenRouterPreset(node, inputs, process.env, pool, orderContext); break;
-          
-          case 'text_input': outputs = await executeTextInput(node, inputs); break;
-          case 'prompt_board': outputs = await executePromptBoard(node, inputs, orderContext); break;
-          case 'string_concat': outputs = await executeStringConcat(node, inputs); break;
-          case 'llm_call': outputs = await executeLlmCall(node, inputs); break;
-          case 'prompt_library': outputs = await executePromptLibrary(node, inputs, pool, executionState); break;
-          
-          case 'image_preview': outputs = await executeImagePreview(node, inputs); break;
-          case 'comfy_remote': outputs = await executeComfyRemote(node, inputs, orderContext, process.env, pool); break;
-          case 'oss_output': outputs = await executeOssOutput(node, inputs, orderContext, process.env); break;
-          case 'http_request': outputs = await executeHttpRequest(node, inputs); break;
-          
-          default:
-            console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
-            outputs.output = inputs;
-            break;
+        
+        const traceLog = {
+          nodeId: node.id,
+          nodeType: node.type,
+          inputs: inputs,
+          outputs: null,
+          status: 'success'
+        };
+
+        if (simulate && ['comfy_remote', 'seedream', 'preset_seedream', 'preset_apiyi', 'preset_grsai', 'preset_openrouter', 'llm_call', 'oss_output', 'http_request'].includes(node.type)) {
+          console.log(`[Pipeline] [SIMULATE] Skipping heavy execution for ${node.type}`);
+          outputs = { _simulate: true, msg: "Skipped in dry run" };
+        } else {
+          switch (node.type) {
+            case 'toolkit_input': outputs = await executeToolkitInput(node, inputs, orderContext, process.env, pool); break;
+            case 'order_input': outputs = await executeOrderInput(node, inputs, orderContext, process.env, pool); break;
+            
+            case 'preset_seedream':
+            case 'seedream': outputs = await executeSeedream(node, inputs, process.env, pool); break;
+            
+            case 'preset_apiyi': outputs = await executeApiyiPreset(node, inputs, process.env, pool, orderContext); break;
+            case 'preset_grsai': outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext); break;
+            case 'preset_openrouter': outputs = await executeOpenRouterPreset(node, inputs, process.env, pool, orderContext); break;
+            
+            case 'text_input': outputs = await executeTextInput(node, inputs); break;
+            case 'prompt_board': outputs = await executePromptBoard(node, inputs, orderContext); break;
+            case 'string_concat': outputs = await executeStringConcat(node, inputs); break;
+            case 'llm_call': outputs = await executeLlmCall(node, inputs); break;
+            case 'prompt_library': outputs = await executePromptLibrary(node, inputs, pool, executionState); break;
+            
+            case 'image_preview': outputs = await executeImagePreview(node, inputs); break;
+            case 'comfy_remote': outputs = await executeComfyRemote(node, inputs, orderContext, process.env, pool); break;
+            case 'oss_output': outputs = await executeOssOutput(node, inputs, orderContext, process.env); break;
+            case 'http_request': outputs = await executeHttpRequest(node, inputs); break;
+            
+            default:
+              console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
+              outputs.output = inputs;
+              break;
+          }
         }
 
         try {
           context[node.id] = outputs;
           completedNodes++;
+          traceLog.outputs = outputs;
+          traceLogs.push(traceLog);
           
-          if (pool && completedNodes <= totalNodes) {
+          if (pool && !simulate && completedNodes <= totalNodes) {
              const nodeNames = {
                order_input: '解析订单参数', toolkit_input: '解析工作台参数',
                preset_seedream: '大模型生图推理', preset_apiyi: '大模型生图推理',
@@ -150,6 +168,10 @@ export async function runPipeline(workflowJson, orderContext, pool) {
       for (const f of failures) console.error(`  - ${f.reason?.message || f.reason}`);
       // Don't throw immediately — let post-processing collect any successful results first
       pipelineError = failures[0].reason;
+    }
+
+    if (simulate) {
+      return { simulate: true, traceLogs, pipelineError: pipelineError ? pipelineError.message : null };
     }
 
     let finalOssImages = [];

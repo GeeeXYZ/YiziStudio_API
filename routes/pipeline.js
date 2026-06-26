@@ -289,5 +289,66 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
     return res.json({ msg: 'err', info: err.message });
   }
 });
+// Simulate Pipeline Execution (Dry Run)
+router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
+  try {
+    const { workflow_json, sku_id, model_uuid, prompt_slots, user_prompt, user_images, model_name } = req.body;
+    if (!workflow_json) return res.status(400).json({ error: 'Missing workflow_json' });
+
+    let skuData = {};
+    if (sku_id) {
+      const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+      const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [sku_id]);
+      if (skuRes.rows.length > 0) {
+        skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+      }
+    }
+
+    const promptSetIds = String(skuData.prompt_set_ids || skuData.prompt_set_id || '').split(',').filter(Boolean).slice(0, 4);
+    const resolvedSlots = await Promise.all(
+      [0, 1, 2, 3].map(async (i) => {
+        const setId = promptSetIds[i];
+        if (!setId) return '';
+        
+        // 1. Try to use frontend mocked slot
+        const mockedSlot = (prompt_slots || [])[i];
+        if (mockedSlot && mockedSlot.content) {
+          return mockedSlot.content;
+        }
+        
+        // 2. Randomly pick from the library
+        try {
+          const randomRes = await pool.query(
+            'SELECT content FROM yizi_prompts WHERE set_id = $1 ORDER BY RANDOM() LIMIT 1', [setId]
+          );
+          return randomRes.rows[0]?.content || '';
+        } catch (e) {
+          console.warn(`[Pipeline Test] Failed to random pick from set ${setId}:`, e.message);
+          return '';
+        }
+      })
+    );
+
+    const orderContext = {
+      isRealOrder: false,
+      order_id: 'test_order_' + Date.now(),
+      model_uuid: model_uuid || '',
+      images: user_images || [],
+      prompt: user_prompt || '',
+      prompt_slot_1: resolvedSlots[0] || '',
+      prompt_slot_2: resolvedSlots[1] || '',
+      prompt_slot_3: resolvedSlots[2] || '',
+      prompt_slot_4: resolvedSlots[3] || '',
+      model_name: model_name || 'Test Model',
+      skuData: skuData
+    };
+
+    const result = await runPipeline(workflow_json, orderContext, pool, { simulate: true });
+    return res.json({ msg: 'ok', data: result });
+  } catch (err) {
+    console.error('[Pipeline Test Error]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

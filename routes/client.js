@@ -334,8 +334,29 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
 
           const pipelineInput = workflowData.workflow_json || workflowData;
 
+          // Resolve prompt slots: use frontend selections, or randomly pick from bound prompt libraries
+          const promptSetIds = String(skuData.prompt_set_ids || skuData.prompt_set_id || '').split(',').filter(Boolean).slice(0, 4);
+          const resolvedSlots = promptSetIds.length > 0 ? await Promise.all(promptSetIds.map(async (setId, i) => {
+              // Check both global prompt_slots and per-set prompt_slots
+              const globalSlot = (data.prompt_slots || [])[i];
+              if (globalSlot && globalSlot.content) {
+                  return globalSlot.content;
+              }
+              // Random pick from this prompt library
+              try {
+                  const randomRes = await pool.query(
+                      'SELECT content FROM yizi_prompts WHERE set_id = $1 ORDER BY RANDOM() LIMIT 1', [setId]
+                  );
+                  return randomRes.rows[0]?.content || '';
+              } catch (e) {
+                  console.warn(`[Prompt Slot] Failed to random pick from set ${setId}:`, e.message);
+                  return '';
+              }
+          })) : [];
+
           if (Array.isArray(data.sets)) {
-            data.sets.forEach((set, index) => {
+            for (let index = 0; index < data.sets.length; index++) {
+              const set = data.sets[index];
               const orderContext = {
                 isRealOrder: true,
                 openid: unionid,
@@ -346,6 +367,10 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 selectedPoseUrl: set.selectedPoseUrl || '',
                 images: set.images || [],
                 prompt: set.prompt || data.prompt || set.extra_prompt || '',
+                prompt_slot_1: (set.prompt_slots && set.prompt_slots[0]?.content) || resolvedSlots[0] || '',
+                prompt_slot_2: (set.prompt_slots && set.prompt_slots[1]?.content) || resolvedSlots[1] || '',
+                prompt_slot_3: (set.prompt_slots && set.prompt_slots[2]?.content) || resolvedSlots[2] || '',
+                prompt_slot_4: (set.prompt_slots && set.prompt_slots[3]?.content) || resolvedSlots[3] || '',
                 model_name: data.model_name || '',
                 auto_delivery: skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1',
                 eventEmitter: orderEventEmitter
@@ -357,7 +382,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
               runPipeline(pipelineInput, orderContext, pool).catch(err => {
                 console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err.message);
               });
-            });
+            }
           }
         } else {
           console.warn(`[Auto Trigger] No workflow found for uuid=${skuData.workflow}`);
@@ -691,28 +716,28 @@ router.post('/client/sku/prompts', authenticateToken, async (req, res) => {
     const setIds = String(promptSetIdsStr).split(',').filter(Boolean);
     if (setIds.length === 0) return res.json({ msg: 'ok', result: [] });
 
-    const resultList = [];
-    
-    for (const setId of setIds) {
-      const setRes = await pool.query('SELECT title FROM yizi_prompt_sets WHERE id = $1', [setId]);
-      if (setRes.rows.length === 0) continue;
-      const setTitle = setRes.rows[0].title;
-      
-      const promptRes = await pool.query('SELECT id, content, data FROM yizi_prompts WHERE set_id = $1 ORDER BY id DESC', [setId]);
-      const prompts = promptRes.rows.map(r => {
-          const pData = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
-          return {
-              id: r.id,
-              title: pData.title || r.id,
-              description: pData.description || '',
-              preview_img: pData.preview_img || '',
-              content: r.content || ''
-          };
-      });
-      if (prompts.length > 0) {
-        resultList.push({ set_id: setId, set_title: setTitle, prompts });
-      }
-    }
+    const resultList = (await Promise.all(setIds.map(async (setId) => {
+        const [setRes, promptRes] = await Promise.all([
+            pool.query('SELECT title FROM yizi_prompt_sets WHERE id = $1', [setId]),
+            pool.query('SELECT id, content, data FROM yizi_prompts WHERE set_id = $1 ORDER BY id DESC', [setId])
+        ]);
+        if (setRes.rows.length === 0) return null;
+        const setTitle = setRes.rows[0].title;
+        const prompts = promptRes.rows.map(r => {
+            const pData = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
+            return {
+                id: r.id,
+                title: pData.title || r.id,
+                description: pData.description || '',
+                preview_img: pData.preview_img || '',
+                content: r.content || ''
+            };
+        });
+        if (prompts.length > 0) {
+            return { set_id: setId, set_title: setTitle, prompts };
+        }
+        return null;
+    }))).filter(Boolean);
     
     res.json({ msg: 'ok', result: resultList });
   } catch (error) {
