@@ -58,8 +58,8 @@ export async function executeSeedream(node, inputs, env, pool) {
           let buffer = Buffer.from(arrayBuffer);
           const sharp = (await import('sharp')).default;
           buffer = await sharp(buffer)
-            .resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: 85 })
+            .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 95 })
             .toBuffer();
           const base64 = buffer.toString('base64');
           base64Images.push(`data:image/jpeg;base64,${base64}`);
@@ -119,8 +119,12 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
 
   const RATIO_TO_SIZE = { '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536', '4:3': '1536x1024', '3:4': '1024x1536', '16:9': '1792x1024', '9:16': '1024x1792' };
   const RATIO_TO_SIZE_2K = { '1:1': '2048x2048', '3:2': '2048x1536', '2:3': '1536x2048', '4:3': '2048x1536', '3:4': '1536x2048', '16:9': '2048x1152', '9:16': '1152x2048' };
+  const RATIO_TO_SIZE_4K = { '1:1': '4096x4096', '3:4': '3520x4704', '4:3': '4704x3520', '16:9': '5504x3040', '9:16': '3040x5504', '2:3': '3328x4992', '3:2': '4992x3328', '21:9': '6240x2656' };
 
-  const resolvedSize = aspectRatio ? ((imageResolution === '2K' || imageResolution === '4K') ? RATIO_TO_SIZE_2K : RATIO_TO_SIZE)[aspectRatio] || '1024x1024' : '';
+  let mappedSize = RATIO_TO_SIZE;
+  if (imageResolution === '2K') mappedSize = RATIO_TO_SIZE_2K;
+  else if (imageResolution === '4K') mappedSize = RATIO_TO_SIZE_4K;
+  const resolvedSize = aspectRatio ? mappedSize[aspectRatio] || '1024x1024' : '';
 
   let messageContent;
   if (combined_images.length > 0) {
