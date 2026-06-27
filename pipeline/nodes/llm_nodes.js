@@ -22,19 +22,86 @@ export async function executeStringConcat(node, inputs) {
   return { output: [s1, s2, s3, s4].filter(s => typeof s === 'string' && s.trim() !== '').join('\n') };
 }
 
-export async function executeLlmCall(node, inputs) {
-  const llmUrl = node.data.api_url || 'https://api.openai.com/v1';
-  const llmKey = node.data.api_key || '';
-  const llmModel = node.data.model_name || 'gpt-3.5-turbo';
-  const llmPrompt = inputs.prompt || '';
+export async function executeLlmCall(node, inputs, env, pool) {
+  const { getSetting } = await import('../../config_manager.js');
   
-  if (!llmKey) throw new Error(`LLM Node missing API Key`);
+  const llmUrl = node.data.api_url || (env?.LLM_API_URL) || await getSetting(pool, 'LLM_API_URL') || 'https://api.openai.com/v1';
+  const llmKey = node.data.api_key || (env?.LLM_API_KEY) || await getSetting(pool, 'LLM_API_KEY') || '';
+  const llmModel = node.data.model_name || 'gpt-4o-mini';
+  const systemPrompt = node.data.system_prompt || '';
+  const llmPrompt = inputs.prompt || inputs.input || '';
+  
+  if (!llmKey) throw new Error(`LLM Node missing API Key. Set it in node data, env LLM_API_KEY, or global settings.`);
 
-  console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions`);
+  // Collect ordered image inputs: image_1, image_2, image_3, ... (preserves order)
+  let images = [];
+  for (let i = 1; i <= 20; i++) {
+    const val = inputs[`image_${i}`];
+    if (val !== undefined) {
+      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      else if (val) images.push(val);
+    }
+  }
+  // Fallback: legacy single 'images' input for backward compatibility
+  if (images.length === 0) {
+    let legacy = inputs.images || inputs.image || [];
+    if (typeof legacy === 'string') legacy = legacy.split(',').map(s => s.trim()).filter(Boolean);
+    if (!Array.isArray(legacy)) legacy = [legacy];
+    images = legacy.flat().filter(Boolean);
+  }
+
+  // Build message content
+  let userContent;
+  if (images.length > 0) {
+    // Vision mode: multimodal content array
+    const contentParts = [];
+    
+    // Add text part
+    if (llmPrompt) {
+      contentParts.push({ type: 'text', text: llmPrompt });
+    }
+
+    // Add image parts
+    for (const url of images) {
+      if (!url) continue;
+      if (url.startsWith('data:image')) {
+        // Already base64
+        contentParts.push({ type: 'image_url', image_url: { url } });
+      } else {
+        // URL — convert to base64 for maximum compatibility
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+          if (!resp.ok) {
+            console.warn(`[LLM Vision] Failed to fetch image: ${url.substring(0, 80)}`);
+            continue;
+          }
+          const arrayBuffer = await resp.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const base64 = buffer.toString('base64');
+          // Detect mime type from first bytes
+          const mime = buffer[0] === 0x89 ? 'image/png' : buffer[0] === 0xFF ? 'image/jpeg' : buffer[0] === 0x52 ? 'image/webp' : 'image/jpeg';
+          contentParts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
+        } catch (imgErr) {
+          console.warn(`[LLM Vision] Failed to process image ${url.substring(0, 80)}:`, imgErr.message);
+        }
+      }
+    }
+    userContent = contentParts;
+    console.log(`[Pipeline] LLM Vision Call to ${llmUrl}/chat/completions, model: ${llmModel}, images: ${images.length}`);
+  } else {
+    // Text-only mode
+    userContent = llmPrompt;
+    console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions, model: ${llmModel}`);
+  }
+
+  const messages = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: userContent });
+
   const chatRes = await fetch(`${llmUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
-    body: JSON.stringify({ model: llmModel, messages: [{ role: 'user', content: llmPrompt }] }),
+    body: JSON.stringify({ model: llmModel, messages }),
     signal: AbortSignal.timeout(120000)
   });
 

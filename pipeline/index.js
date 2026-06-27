@@ -99,7 +99,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
             case 'text_input': outputs = await executeTextInput(node, inputs); break;
             case 'prompt_board': outputs = await executePromptBoard(node, inputs, orderContext); break;
             case 'string_concat': outputs = await executeStringConcat(node, inputs); break;
-            case 'llm_call': outputs = await executeLlmCall(node, inputs); break;
+            case 'llm_call': outputs = await executeLlmCall(node, inputs, process.env, pool); break;
             case 'prompt_library': outputs = await executePromptLibrary(node, inputs, pool, executionState); break;
             
             case 'image_preview': outputs = await executeImagePreview(node, inputs); break;

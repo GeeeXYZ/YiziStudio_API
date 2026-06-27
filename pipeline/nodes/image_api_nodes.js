@@ -8,8 +8,21 @@ export async function executeSeedream(node, inputs, env, pool) {
   const globalEndpointId = env.VOLCENGINE_ENDPOINT_ID || await getSetting(pool, 'VOLCENGINE_ENDPOINT_ID');
   const endpointId = node.data.endpoint_id || node.data.endpointId || globalEndpointId || 'ep-xxxx';
   const sizePreset = node.data.size || '2k (Origin)';
-  let images = inputs.images || [];
-  
+  // Collect ordered image inputs: image_1, image_2, image_3, ... (preserves order)
+  let images = [];
+  for (let i = 1; i <= 20; i++) {
+    const val = inputs[`image_${i}`];
+    if (val !== undefined) {
+      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      else if (val) images.push(val);
+    }
+  }
+  // Fallback: legacy single 'images' input for backward compatibility
+  if (images.length === 0) {
+    let legacy = inputs.images || [];
+    if (typeof legacy === 'string') legacy = [legacy];
+    images = Array.isArray(legacy) ? legacy.flat().filter(Boolean) : [];
+  }
   if (typeof images === 'string') images = [images];
 
   const apiKey = env.VOLCENGINE_API_KEY || await getSetting(pool, 'VOLCENGINE_API_KEY');
