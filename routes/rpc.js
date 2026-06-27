@@ -38,11 +38,11 @@ const rpcHandler = async (req, res) => {
       const numAmount = parseFloat(amount);
       const paymentAmount = parseInt(actual_payment) || 0;
       
-      if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无�? });
-      if (!remark) return res.json({ msg: 'err', info: '充值备注不能为�? });
+      if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无效' });
+      if (!remark) return res.json({ msg: 'err', info: '充值备注不能为空' });
 
       const userRes = await pool.query('SELECT "_id", "points", "phone_number" FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1 OR "_id" = $1', [user_id]);
-      if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存�? });
+      if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存在' });
       
       const user = userRes.rows[0];
       const currentPoints = parseFloat(user.points) || 0;
@@ -64,7 +64,7 @@ const rpcHandler = async (req, res) => {
           [orderId, user._id, numAmount, req.user.account, remark, new Date().toISOString(), JSON.stringify(orderData)]
       );
 
-      return res.json({ msg: 'ok', info: `成功为用户操�?${numAmount} coz` });
+      return res.json({ msg: 'ok', info: `成功为用户操作 ${numAmount} coz` });
     }
     
     if (db_name === 'yizi_orders' && action === 'refund') {
@@ -72,13 +72,13 @@ const rpcHandler = async (req, res) => {
       if (!order_id) return res.json({ msg: 'err', info: '缺少订单ID' });
       
       const orderRes = await pool.query('SELECT * FROM "yizi_orders" WHERE "id" = $1', [order_id]);
-      if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存�? });
+      if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存在' });
       
       const order = orderRes.rows[0];
       const orderData = typeof order.data === 'string' ? JSON.parse(order.data) : (order.data || {});
       
       if (orderData.refunded === '1') {
-        return res.json({ msg: 'err', info: '该订单已退回，无法重复退�? });
+        return res.json({ msg: 'err', info: '该订单已退回，无法重复退回' });
       }
 
       // Use the cached total_cost if available, else fallback for legacy orders
@@ -113,7 +113,7 @@ const rpcHandler = async (req, res) => {
           event: 'ORDER_REFUNDED'
       });
 
-      return res.json({ msg: 'ok', info: `已退回，并返�?${totalCost} coz 积分` });
+      return res.json({ msg: 'ok', info: `已退回，并返还 ${totalCost} coz 积分` });
     }
 
     // A. Custom handlers for yizi_oss_delivery_imgs (list and del)
@@ -773,5 +773,3 @@ router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalMod
 router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, checkRbacPermission, rpcHandler);
 
 export default router;
-
-
