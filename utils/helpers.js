@@ -64,7 +64,10 @@ function formatOrderRow(row) {
   if (Array.isArray(parsedData.sets)) {
     groupCount = parsedData.sets.length;
     parsedData.sets.forEach(s => {
-      if (Array.isArray(s.delivery_imgs) && s.delivery_imgs.length > 0) {
+      // If the order is waiting for admin delivery, hide the delivery_imgs from the client
+      if (row.wait_delivery === '1') {
+        s.delivery_imgs = [];
+      } else if (Array.isArray(s.delivery_imgs) && s.delivery_imgs.length > 0) {
         deliveryCount++;
         if (s.delivery_imgs.some(d => d.confirmed_at)) {
           confirmGroupCount++;
