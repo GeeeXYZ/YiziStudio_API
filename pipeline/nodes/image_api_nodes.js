@@ -41,7 +41,8 @@ export async function executeSeedream(node, inputs, env, pool) {
     model: endpointId,
     prompt: prompt,
     size: apiSize,
-    logo_info: { add_logo: false }
+    watermark: false, // For new API standard
+    logo_info: { add_logo: false } // For legacy backward compatibility
   };
 
   if (images.length > 0) {
