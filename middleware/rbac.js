@@ -11,6 +11,7 @@ const checkRbacPermission = async (req, res, next) => {
     
     let requiredPermission = null;
     const short_db_name = db_name.replace('yizi_', '');
+
     if (action.includes('list') || action.includes('get') || action === 'assets/list') {
       requiredPermission = `${short_db_name}:read`;
     } else if (action === 'add' || action === 'reset' || action === 'del' || action === 'trigger' || action === 'sts' || action === 'oss/delete') {
@@ -58,9 +59,43 @@ const checkPermission = (requiredPermission) => {
       next();
     } catch (err) {
       console.error('[checkPermission Error]', err);
-      return res.status(500).json({ msg: 'err', info: '内部服务器错误' });
+      return res.status(500).json({ msg: 'err', info: 'Server Error' });
     }
   };
 };
 
-export { checkRbacPermission, checkPermission };
+const checkLogicalModule = (logicalModule) => {
+  return async (req, res, next) => {
+    const action = req.params.action;
+    let requiredPermission = null;
+
+    if (action.includes('list') || action.includes('get') || action === 'assets/list') {
+      requiredPermission = `${logicalModule}:read`;
+    } else if (action === 'add' || action === 'reset' || action === 'del' || action === 'trigger' || action === 'sts' || action === 'oss/delete') {
+      requiredPermission = `${logicalModule}:write`;
+    }
+
+    if (!requiredPermission) return next();
+
+    if (!req.user) return res.status(401).json({ msg: 'err', info: 'Unauthorized' });
+    if (req.user.is_super) return next();
+    if (!req.user.role_id) return res.status(403).json({ msg: 'err', info: 'Forbidden: 账号未分配角色权限' });
+
+    try {
+      const roleRes = await pool.query('SELECT permissions FROM "yizi_roles" WHERE id = $1', [req.user.role_id]);
+      let userPerms = [];
+      if (roleRes.rows.length > 0 && roleRes.rows[0].permissions) {
+        userPerms = typeof roleRes.rows[0].permissions === 'string' ? JSON.parse(roleRes.rows[0].permissions) : roleRes.rows[0].permissions;
+      }
+      if (!userPerms.includes(requiredPermission)) {
+        return res.status(403).json({ msg: 'err', info: `Forbidden: 缺少关联模块必需权限 [${requiredPermission}]` });
+      }
+      next();
+    } catch (err) {
+      console.error('[checkLogicalModule Error]', err);
+      return res.status(500).json({ msg: 'err', info: 'Server Error' });
+    }
+  };
+};
+
+export { checkRbacPermission, checkPermission, checkLogicalModule };

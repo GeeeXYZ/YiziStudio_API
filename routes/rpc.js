@@ -3,18 +3,28 @@ import crypto from 'crypto';
 import OSS from 'ali-oss';
 import { pool, getPrimaryKeyColumn, getTableColumns } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { checkRbacPermission } from '../middleware/rbac.js';
+import { checkRbacPermission, checkLogicalModule } from '../middleware/rbac.js';
 import { getActualTableName, unpackRow, prepareQueryValue } from '../utils/helpers.js';
 import { getOSSToken, extractOSSKeys, deleteOSSObjects } from '../utils/oss.js';
 import { orderEventEmitter } from '../events.js';
 
 const router = express.Router();
 
-// 2. RPC Main Channel
-// Action path example: /admin/orders/list, /admin/sku/add
-router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, checkRbacPermission, async (req, res) => {
+// 2. RPC Main Handler Core
+const rpcHandler = async (req, res) => {
+  // If invoked via generic route, module is from params, otherwise default to admin for explicit routes
   const module = req.params.module || (req.path.startsWith('/client/') ? 'client' : 'admin');
-  const db_name = getActualTableName(req.params.db_name);
+  
+  // If db_name is not provided in params (i.e., explicit route), infer it from the path
+  let rawDbName = req.params.db_name;
+  if (!rawDbName) {
+    const segments = req.path.split('/');
+    // e.g. /admin/yizi_cases/list -> segments: ['', 'admin', 'yizi_cases', 'list']
+    rawDbName = segments[2];
+  }
+  const db_name = getActualTableName(rawDbName);
+  
+  // Action is always from params because of :action(*)
   const action = req.params.action;
   const params = req.body;
 
@@ -28,11 +38,11 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
       const numAmount = parseFloat(amount);
       const paymentAmount = parseInt(actual_payment) || 0;
       
-      if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无效' });
-      if (!remark) return res.json({ msg: 'err', info: '充值备注不能为空' });
+      if (isNaN(numAmount) || numAmount === 0) return res.json({ msg: 'err', info: '充值金额无�? });
+      if (!remark) return res.json({ msg: 'err', info: '充值备注不能为�? });
 
       const userRes = await pool.query('SELECT "_id", "points", "phone_number" FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $1 OR "_id" = $1', [user_id]);
-      if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存在' });
+      if (userRes.rows.length === 0) return res.json({ msg: 'err', info: '用户不存�? });
       
       const user = userRes.rows[0];
       const currentPoints = parseFloat(user.points) || 0;
@@ -54,7 +64,7 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
           [orderId, user._id, numAmount, req.user.account, remark, new Date().toISOString(), JSON.stringify(orderData)]
       );
 
-      return res.json({ msg: 'ok', info: `成功为用户操作 ${numAmount} coz` });
+      return res.json({ msg: 'ok', info: `成功为用户操�?${numAmount} coz` });
     }
     
     if (db_name === 'yizi_orders' && action === 'refund') {
@@ -62,13 +72,13 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
       if (!order_id) return res.json({ msg: 'err', info: '缺少订单ID' });
       
       const orderRes = await pool.query('SELECT * FROM "yizi_orders" WHERE "id" = $1', [order_id]);
-      if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存在' });
+      if (orderRes.rows.length === 0) return res.json({ msg: 'err', info: '订单不存�? });
       
       const order = orderRes.rows[0];
       const orderData = typeof order.data === 'string' ? JSON.parse(order.data) : (order.data || {});
       
       if (orderData.refunded === '1') {
-        return res.json({ msg: 'err', info: '该订单已退回，无法重复退回' });
+        return res.json({ msg: 'err', info: '该订单已退回，无法重复退�? });
       }
 
       // Use the cached total_cost if available, else fallback for legacy orders
@@ -103,7 +113,7 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
           event: 'ORDER_REFUNDED'
       });
 
-      return res.json({ msg: 'ok', info: `已退回，并返还 ${totalCost} coz 积分` });
+      return res.json({ msg: 'ok', info: `已退回，并返�?${totalCost} coz 积分` });
     }
 
     // A. Custom handlers for yizi_oss_delivery_imgs (list and del)
@@ -743,10 +753,25 @@ router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '
 
     // Default fallback
     res.json({ msg: 'err', info: `Not implemented action: ${action}` });
-  } catch (error) {
-    console.error(`[RPC Error] ${module}/${db_name}/${action}`, error);
-    res.json({ msg: 'err', info: error.message });
+  } catch (err) {
+    console.error(`[RPC Error] ${db_name}/${action}`, err);
+    res.json({ msg: 'err', info: 'Server internal error', error: err.message });
   }
-});
+};
+
+// ----------------------------------------------------
+// Route Registrations
+// ----------------------------------------------------
+
+// Explicit Domain Overrides (Intercepted before generic RPC to map logical permissions)
+router.post('/admin/yizi_cases/:action(*)', authenticateToken, checkLogicalModule('workflow'), rpcHandler);
+router.post('/admin/yizi_prompt_sets/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
+router.post('/admin/yizi_prompt_groups/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
+router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
+
+// Generic RPC Fallback (Requires exact table permission)
+router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, checkRbacPermission, rpcHandler);
 
 export default router;
+
+
