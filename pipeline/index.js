@@ -10,6 +10,35 @@ import { uploadToOSS } from './core/oss_helper.js';
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
 export { uploadToOSS };
 
+export async function runSingleNode(node, inputs, env, pool, orderContext, executionState = null) {
+  switch (node.type) {
+    case 'toolkit_input': return await executeToolkitInput(node, inputs, orderContext, env, pool);
+    case 'order_input': return await executeOrderInput(node, inputs, orderContext, env, pool);
+    
+    case 'preset_seedream':
+    case 'seedream': return await executeSeedream(node, inputs, env, pool);
+    
+    case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext);
+    case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext);
+    case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext);
+    
+    case 'text_input': return await executeTextInput(node, inputs);
+    case 'prompt_board': return await executePromptBoard(node, inputs, orderContext);
+    case 'string_concat': return await executeStringConcat(node, inputs);
+    case 'llm_call': return await executeLlmCall(node, inputs, env, pool);
+    case 'prompt_library': return await executePromptLibrary(node, inputs, pool, executionState);
+    
+    case 'image_preview': return await executeImagePreview(node, inputs);
+    case 'comfy_remote': return await executeComfyRemote(node, inputs, orderContext, env, pool);
+    case 'oss_output': return await executeOssOutput(node, inputs, orderContext, env);
+    case 'http_request': return await executeHttpRequest(node, inputs);
+    
+    default:
+      console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
+      return { output: inputs };
+  }
+}
+
 export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
   const { simulate = false } = options;
   const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -85,33 +114,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
           console.log(`[Pipeline] [SIMULATE] Skipping heavy execution for ${node.type}`);
           outputs = { _simulate: true, msg: "Skipped in dry run" };
         } else {
-          switch (node.type) {
-            case 'toolkit_input': outputs = await executeToolkitInput(node, inputs, orderContext, process.env, pool); break;
-            case 'order_input': outputs = await executeOrderInput(node, inputs, orderContext, process.env, pool); break;
-            
-            case 'preset_seedream':
-            case 'seedream': outputs = await executeSeedream(node, inputs, process.env, pool); break;
-            
-            case 'preset_apiyi': outputs = await executeApiyiPreset(node, inputs, process.env, pool, orderContext); break;
-            case 'preset_grsai': outputs = await executeGrsaiPreset(node, inputs, process.env, pool, orderContext); break;
-            case 'preset_openrouter': outputs = await executeOpenRouterPreset(node, inputs, process.env, pool, orderContext); break;
-            
-            case 'text_input': outputs = await executeTextInput(node, inputs); break;
-            case 'prompt_board': outputs = await executePromptBoard(node, inputs, orderContext); break;
-            case 'string_concat': outputs = await executeStringConcat(node, inputs); break;
-            case 'llm_call': outputs = await executeLlmCall(node, inputs, process.env, pool); break;
-            case 'prompt_library': outputs = await executePromptLibrary(node, inputs, pool, executionState); break;
-            
-            case 'image_preview': outputs = await executeImagePreview(node, inputs); break;
-            case 'comfy_remote': outputs = await executeComfyRemote(node, inputs, orderContext, process.env, pool); break;
-            case 'oss_output': outputs = await executeOssOutput(node, inputs, orderContext, process.env); break;
-            case 'http_request': outputs = await executeHttpRequest(node, inputs); break;
-            
-            default:
-              console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
-              outputs.output = inputs;
-              break;
-          }
+          outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
         }
 
         try {

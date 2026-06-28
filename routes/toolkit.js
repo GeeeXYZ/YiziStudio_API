@@ -233,101 +233,64 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
     client.release();
   }
 });
+// GET /toolkit/vision_api/registry
+router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) => {
+  const registry = [
+    { id: 'preset_grsai', name: 'Grsai 引擎', models: ['gpt-image-2', 'dall-e-3'] },
+    { id: 'preset_apiyi', name: 'ApiYi 引擎', models: ['gpt-image-2-vip', 'gpt-image-2-all', 'dall-e-3'] },
+    { id: 'seedream', name: 'Seedream', models: ['seedream-4.5'] }
+  ];
+  return res.json({ msg: 'ok', data: registry });
+});
 
-router.post('/toolkit/grsai', authenticateToken, async (req, res) => {
-  const { images, prompt, model, aspectRatio, quality } = req.body;
-
-  const { getSetting } = await import('../config_manager.js');
-  const endpoint = process.env.GRSAI_API_ENDPOINT || await getSetting(pool, 'GRSAI_API_ENDPOINT');
-  const apiKey = process.env.GRSAI_API_KEY || await getSetting(pool, 'GRSAI_API_KEY');
-
-  if (!endpoint || !apiKey) {
-    return res.json({ msg: 'err', info: 'Grsai API not configured in settings' });
-  }
-
-  let baseUrl = endpoint.trim();
-  if (!baseUrl.startsWith('http')) baseUrl = 'https://' + baseUrl;
-  const generateUrl = baseUrl.endsWith('/generate') ? baseUrl : `${baseUrl.replace(/\/$/, '')}/api/generate`;
-  const resultUrl = generateUrl.replace(/\/generate$/, '/result');
-  const token = apiKey.trim().replace(/^Bearer\s+/i, '');
-
-  const payload = {
-    model: model || 'gpt-image-2',
-    prompt: prompt || '',
-    images: Array.isArray(images) ? images : (images ? [images] : []),
-    aspectRatio: aspectRatio || '1024x1024',
-    quality: quality || 'standard',
-    replyType: 'async'
-  };
+// POST /toolkit/vision_api/execute
+router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) => {
+  const { nodeType, model, prompt, images, aspectRatio, quality } = req.body;
+  if (!nodeType) return res.json({ msg: 'err', info: 'Missing nodeType' });
 
   try {
-    console.log(`[Toolkit Grsai] Submitting to ${generateUrl}`);
-    const submitRes = await fetch(generateUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30000)
-    });
-
-    if (!submitRes.ok) {
-      const errText = await submitRes.text();
-      return res.json({ msg: 'err', info: `Grsai API [${submitRes.status}]: ${errText}` });
-    }
-
-    const data = await submitRes.json();
-    if (!data.id) {
-      return res.json({ msg: 'err', info: 'Grsai did not return a task ID' });
-    }
-
-    const taskId = data.id;
-    console.log(`[Toolkit Grsai] Task ${taskId} submitted, polling...`);
-
-    // Poll for result (max 5 minutes = 30 polls * 10s)
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    let consecutiveErrors = 0;
-
-    for (let i = 0; i < 30; i++) {
-      await sleep(10000);
-
-      let pollRes;
-      try {
-        pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-          signal: AbortSignal.timeout(15000)
-        });
-      } catch (fetchErr) {
-        consecutiveErrors++;
-        if (consecutiveErrors >= 5) {
-          return res.json({ msg: 'err', info: `Poll network error after ${consecutiveErrors} retries: ${fetchErr.message}` });
-        }
-        continue;
+    const { runSingleNode } = await import('../pipeline/index.js');
+    
+    // Construct virtual node and inputs to simulate pipeline environment
+    const virtualNode = {
+      id: 'toolkit_vision_api',
+      type: nodeType,
+      data: {
+        modelId: model,
+        model: model,
+        prompt: prompt,
+        genSize: aspectRatio,
+        resolution: aspectRatio,
+        aspectRatio: aspectRatio,
+        genQuality: quality,
+        size: aspectRatio // For Seedream
       }
+    };
+    
+    const virtualInputs = {
+      prompt: prompt,
+      input: prompt,
+      images: images, // For Seedream backward compatibility
+      ref_images: images,
+      ref_image_1: Array.isArray(images) ? images[0] : images // OpenRouter & ApiYi compatibility
+    };
 
-      if (!pollRes.ok) {
-        consecutiveErrors++;
-        if (consecutiveErrors >= 5) {
-          return res.json({ msg: 'err', info: `Poll HTTP error after ${consecutiveErrors} retries (last: ${pollRes.status})` });
-        }
-        continue;
-      }
-
-      consecutiveErrors = 0;
-      const pollData = await pollRes.json();
-
-      if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
-        const urls = pollData.results.map(r => r.url);
-        console.log(`[Toolkit Grsai] Task ${taskId} succeeded: ${urls.length} images`);
-        return res.json({ msg: 'ok', images: urls, task_id: taskId });
-      } else if (pollData.status === 'failed') {
-        return res.json({ msg: 'err', info: pollData.error || pollData.message || 'Task failed', task_id: taskId });
-      }
-      // else still processing, continue polling
+    const mockOrderContext = { order_id: 'toolkit_vision_direct' };
+    
+    const outputs = await runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null);
+    
+    if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
+      let urls = outputs.output_images || outputs.output || outputs.images;
+      if (!Array.isArray(urls)) urls = [urls];
+      // Filter out empty entries
+      urls = urls.filter(u => u && typeof u === 'string' && u.trim() !== '');
+      if (urls.length === 0) return res.json({ msg: 'err', info: 'Node returned empty images list' });
+      return res.json({ msg: 'ok', images: urls });
+    } else {
+      return res.json({ msg: 'err', info: 'No images generated by the node' });
     }
-
-    return res.json({ msg: 'err', info: `Task ${taskId} timed out after 300s` });
-
   } catch (err) {
-    console.error('[Toolkit Grsai Error]', err);
+    console.error(`[Toolkit Vision API Error]`, err);
     return res.json({ msg: 'err', info: err.message });
   }
 });
