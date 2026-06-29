@@ -235,57 +235,74 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
 });
 // GET /toolkit/vision_api/registry
 router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) => {
+  const apiyiSizes = [
+    { value: '1024x1024', label: '1024x1024 (1:1)' },
+    { value: '1280x720', label: '1280x720 (16:9)' },
+    { value: '720x1280', label: '720x1280 (9:16)' },
+    { value: '1152x864', label: '1152x864 (4:3)' },
+    { value: '864x1152', label: '864x1152 (3:4)' },
+    { value: '2048x2048', label: '2048x2048 (1:1 HD)' },
+    { value: '2048x1152', label: '2048x1152 (16:9 HD)' },
+    { value: '1152x2048', label: '1152x2048 (9:16 HD)' },
+    { value: '2048x1536', label: '2048x1536 (4:3 HD)' },
+    { value: '1536x2048', label: '1536x2048 (3:4 HD)' }
+  ];
+
   const registry = [
     { 
       id: 'preset_grsai', 
       name: 'Grsai 引擎', 
       models: [
-        { id: 'gpt-image-2', name: 'GPT Image 2' },
-        { id: 'gpt-image-2-vip', name: 'GPT Image 2 VIP' },
-        { id: 'dall-e-3', name: 'DALL-E 3' }
-      ],
-      sizes: [
-        { value: '1024x1024', label: '1024x1024 (方形)' },
-        { value: '1792x1024', label: '1792x1024 (横版)' },
-        { value: '1024x1792', label: '1024x1792 (竖版)' },
-        { value: '1024x768', label: '1024x768 (4:3)' },
-        { value: '768x1024', label: '768x1024 (3:4)' }
+        { 
+          id: 'gpt-image-2', 
+          name: 'GPT Image 2',
+          sizes: [
+            { value: '1024x1024', label: '1024x1024 (方形)' },
+            { value: '1792x1024', label: '1792x1024 (横版)' },
+            { value: '1024x1792', label: '1024x1792 (竖版)' }
+          ]
+        },
+        { 
+          id: 'gpt-image-2-vip', 
+          name: 'GPT Image 2 VIP',
+          sizes: apiyiSizes
+        },
+        { 
+          id: 'nano-banana-2', 
+          name: 'Nano Banana 2',
+          sizes: [
+            { value: '1:1',  label: '1:1 方形' },
+            { value: '16:9', label: '16:9 横版' },
+            { value: '9:16', label: '9:16 竖版' }
+          ]
+        }
       ]
     },
     { 
       id: 'preset_apiyi', 
       name: 'ApiYi 引擎', 
       models: [
-        { id: 'gpt-image-2-vip', name: 'gpt-image-2-vip' },
-        { id: 'gpt-image-2-all', name: 'gpt-image-2-all' }
-      ],
-      sizes: [
-        { value: '1024x1024', label: '1024x1024 (1:1)' },
-        { value: '1280x720', label: '1280x720 (16:9)' },
-        { value: '720x1280', label: '720x1280 (9:16)' },
-        { value: '1152x864', label: '1152x864 (4:3)' },
-        { value: '864x1152', label: '864x1152 (3:4)' },
-        { value: '2048x2048', label: '2048x2048 (1:1 HD)' },
-        { value: '2048x1152', label: '2048x1152 (16:9 HD)' },
-        { value: '1152x2048', label: '1152x2048 (9:16 HD)' },
-        { value: '2048x1536', label: '2048x1536 (4:3 HD)' },
-        { value: '1536x2048', label: '1536x2048 (3:4 HD)' }
+        { id: 'gpt-image-2-vip', name: 'gpt-image-2-vip', sizes: apiyiSizes },
+        { id: 'gpt-image-2-all', name: 'gpt-image-2-all', sizes: apiyiSizes }
       ]
     },
     { 
       id: 'seedream', 
       name: 'Seedream', 
       models: [
-        { id: 'default', name: '全局端点 (Default)' }
-      ],
-      sizes: [
-        { value: '2k (Origin)', label: '2k (Origin)' },
-        { value: '4k (Origin)', label: '4k (Origin)' },
-        { value: '2048x2048 (1:1)', label: '2048x2048 (1:1)' },
-        { value: '2496x1664 (3:2)', label: '2496x1664 (3:2)' },
-        { value: '1664x2496 (2:3)', label: '1664x2496 (2:3)' },
-        { value: '2304x1728 (4:3)', label: '2304x1728 (4:3)' },
-        { value: '1728x2304 (3:4)', label: '1728x2304 (3:4)' }
+        { 
+          id: 'default', 
+          name: '全局端点 (Default)',
+          sizes: [
+            { value: '2k (Origin)', label: '2k (Origin)' },
+            { value: '4k (Origin)', label: '4k (Origin)' },
+            { value: '2048x2048 (1:1)', label: '2048x2048 (1:1)' },
+            { value: '2496x1664 (3:2)', label: '2496x1664 (3:2)' },
+            { value: '1664x2496 (2:3)', label: '1664x2496 (2:3)' },
+            { value: '2304x1728 (4:3)', label: '2304x1728 (4:3)' },
+            { value: '1728x2304 (3:4)', label: '1728x2304 (3:4)' }
+          ]
+        }
       ]
     }
   ];
