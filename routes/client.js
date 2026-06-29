@@ -146,8 +146,8 @@ router.post('/client/sms/login', async (req, res) => {
       const randomPassword = crypto.createHash('sha256').update(crypto.randomBytes(16)).digest('hex');
       const defaultPoints = '240';
       await pool.query(
-        'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password") VALUES ($1, $2, $3, $4, $5)',
-        [newUserId, newUserId, phone, defaultPoints, randomPassword]
+        'INSERT INTO "yizi_users" ("_id", "user_id", "phone_number", "points", "password", "has_password") VALUES ($1, $2, $3, $4, $5, $6)',
+        [newUserId, newUserId, phone, defaultPoints, randomPassword, false]
       );
       user = { user_id: newUserId, phone_number: phone };
     }
@@ -202,6 +202,20 @@ router.post('/client/user/phone_number/set', authenticateToken, async (req, res)
   }
 });
 
+// 4.1 Get has_password
+router.get('/client/user/has_password', authenticateToken, async (req, res) => {
+  const unionid = req.user.unionid;
+  try {
+    const result = await pool.query('SELECT has_password FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
+    if (result.rows.length > 0) {
+      return res.json({ msg: 'ok', result: { has_password: !!result.rows[0].has_password } });
+    }
+    res.json({ msg: 'err', info: 'User not found' });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
+});
+
 // 4.5 Set user password
 router.post('/client/user/password/set', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
@@ -212,26 +226,29 @@ router.post('/client/user/password/set', authenticateToken, async (req, res) => 
   }
 
   try {
-    const userQuery = await pool.query('SELECT password FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
+    const userQuery = await pool.query('SELECT password, has_password FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
     if (userQuery.rows.length === 0) {
       return res.json({ msg: 'err', info: '用户不存在' });
     }
     
-    const currentPasswordHash = userQuery.rows[0].password;
+    const user = userQuery.rows[0];
+    const currentPasswordHash = user.password;
+    const hasPassword = user.has_password;
     
-    // 如果用户提供了旧密码，则必须验证
-    // (由于部分老用户可能是系统生成的随机密码且未提供其他找回途径，为了防止功能锁死，如果在已知没有旧密码等情况下可在此处拓展免密逻辑。当前严格按需校验)
-    if (!old_password) {
-      return res.json({ msg: 'err', info: '请输入旧密码' });
-    }
-    
-    const oldPasswordHash = crypto.createHash('sha256').update(old_password).digest('hex');
-    if (oldPasswordHash !== currentPasswordHash) {
-      return res.json({ msg: 'err', info: '旧密码错误' });
+    // 如果用户设置过密码，则必须验证旧密码
+    if (hasPassword) {
+      if (!old_password) {
+        return res.json({ msg: 'err', info: '请输入旧密码' });
+      }
+      
+      const oldPasswordHash = crypto.createHash('sha256').update(old_password).digest('hex');
+      if (oldPasswordHash !== currentPasswordHash) {
+        return res.json({ msg: 'err', info: '旧密码错误' });
+      }
     }
 
     const hashedPassword = crypto.createHash('sha256').update(new_password).digest('hex');
-    await pool.query('UPDATE "yizi_users" SET "password" = $1 WHERE "user_id" = $2', [hashedPassword, unionid]);
+    await pool.query('UPDATE "yizi_users" SET "password" = $1, "has_password" = $2 WHERE "user_id" = $3', [hashedPassword, true, unionid]);
     res.json({ msg: 'ok' });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
