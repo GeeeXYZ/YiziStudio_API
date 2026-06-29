@@ -203,7 +203,7 @@ router.post('/client/user/phone_number/set', authenticateToken, async (req, res)
 });
 
 // 4.1 Get has_password
-router.get('/client/user/has_password', authenticateToken, async (req, res) => {
+router.post('/client/user/has_password', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   try {
     const result = await pool.query('SELECT has_password FROM "yizi_users" WHERE "user_id" = $1', [unionid]);
