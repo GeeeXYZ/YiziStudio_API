@@ -13,7 +13,7 @@ function getActualTableName(db_name) {
     'user': 'yizi_users',      // user -> yizi_users
     'case': 'yizi_cases',      // case -> yizi_cases
     'model': 'yizi_model',
-    'prompt': 'yizi_prompt',
+    'prompt': 'yizi_prompts',
     'vip_settings': 'yizi_vip_settings',
     'comments': 'yizi_comments',
     'front_sku_settings': 'yizi_front_sku_settings',
