@@ -768,6 +768,7 @@ router.post('/admin/yizi_cases/:action(*)', authenticateToken, checkLogicalModul
 router.post('/admin/yizi_prompt_sets/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_prompt_groups/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
+router.post('/admin/yizi_oss_delivery_imgs/:action(*)', authenticateToken, checkLogicalModule('workspace'), rpcHandler);
 
 // Generic RPC Fallback (Requires exact table permission)
 router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, checkRbacPermission, rpcHandler);
