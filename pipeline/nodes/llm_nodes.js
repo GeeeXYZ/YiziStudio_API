@@ -27,7 +27,7 @@ export async function executeLlmCall(node, inputs, env, pool) {
   
   const llmUrl = node.data.api_url || (env?.LLM_API_URL) || await getSetting(pool, 'LLM_API_URL') || 'https://api.openai.com/v1';
   const llmKey = node.data.api_key || (env?.LLM_API_KEY) || await getSetting(pool, 'LLM_API_KEY') || '';
-  const llmModel = node.data.model_name || 'gpt-4o-mini';
+  const llmModel = node.data.model_name || (env?.LLM_API_MODEL) || await getSetting(pool, 'LLM_API_MODEL') || 'gpt-4o-mini';
   const systemPrompt = node.data.system_prompt || '';
   const llmPrompt = inputs.prompt || inputs.input || '';
   
