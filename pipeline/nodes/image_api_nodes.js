@@ -1,4 +1,5 @@
 import { getSetting } from '../../config_manager.js';
+import { fetchWithRetry } from '../core/fetch_helper.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -53,7 +54,7 @@ export async function executeSeedream(node, inputs, env, pool) {
         base64Images.push(url);
       } else {
         try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
+          const resp = await fetchWithRetry(url, { signal: AbortSignal.timeout(60000) });
           if (!resp.ok) continue;
           const arrayBuffer = await resp.arrayBuffer();
           let buffer = Buffer.from(arrayBuffer);
@@ -73,7 +74,7 @@ export async function executeSeedream(node, inputs, env, pool) {
   }
 
   console.log(`[Pipeline] Seedream executing... model: ${endpointId}, size: ${apiSize}`);
-  const res = await fetch("https://ark.cn-beijing.volces.com/api/v3/images/generations", {
+  const res = await fetchWithRetry("https://ark.cn-beijing.volces.com/api/v3/images/generations", {
     method: 'POST',
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(payload),
@@ -143,7 +144,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
   }
   if (resolvedSize) payload.size = resolvedSize;
 
-  const res = await fetch(endpoint, {
+  const res = await fetchWithRetry(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
     body: JSON.stringify(payload),
@@ -238,7 +239,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
       try {
-        const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(60000) });
+        const imgRes = await fetchWithRetry(imgUrl, { signal: AbortSignal.timeout(60000) });
         if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
         const imgBlob = await imgRes.blob();
         let ext = 'png';
@@ -260,7 +261,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(endpointUrl, {
+  const res = await fetchWithRetry(endpointUrl, {
     method: 'POST',
     headers: headers,
     body: reqBody,
@@ -314,7 +315,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
     replyType: 'async'
   };
 
-  const res = await fetch(generateUrl, {
+  const res = await fetchWithRetry(generateUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify(payload),
@@ -341,7 +342,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
       
       let pollRes;
       try {
-        pollRes = await fetch(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
+        pollRes = await fetchWithRetry(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
           headers: { 'Authorization': `Bearer ${token}` },
           signal: AbortSignal.timeout(15000)
         });

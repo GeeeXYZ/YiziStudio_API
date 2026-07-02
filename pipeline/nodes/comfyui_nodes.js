@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { fetchWithRetry } from '../core/fetch_helper.js';
 
 export async function executeComfyRemote(node, inputs, orderContext, env, pool) {
   if (!pool) throw new Error('comfy_remote requires database pool to fetch workflow');
@@ -120,11 +121,12 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
 
   let response;
   try {
-    response = await fetch(`${comfyuiServerUrl}/prompt`, {
+    response = await fetchWithRetry(`${comfyuiServerUrl}/prompt`, {
       method: 'POST',
       headers: fetchHeaders,
-      body: JSON.stringify(promptPayload)
-    });
+      body: JSON.stringify(promptPayload),
+      signal: AbortSignal.timeout(30000)
+    }, { maxRetries: 3, baseDelayMs: 2000 });
   } catch (fetchErr) {
     throw new Error(`无法连接到 ComfyUI 服务 (${comfyuiServerUrl}): ${fetchErr.message}`);
   }
