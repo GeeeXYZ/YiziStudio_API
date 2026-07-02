@@ -5,6 +5,15 @@ import dotenv from 'dotenv';
 // Initialize environment variables
 dotenv.config();
 
+// Global Crash Handlers for Zeabur Debugging
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 // Initialize database connection (runs DDL on import)
 import './config/db.js';
 
