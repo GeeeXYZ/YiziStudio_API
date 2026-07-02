@@ -197,6 +197,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
        try {
            const ossConfig = { region: process.env.OSS_REGION, accessKeyId: process.env.OSS_ACCESS_KEY_ID, accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET, bucket: process.env.OSS_BUCKET, secure: true, timeout: 300000 };
            if (ossConfig.accessKeyId) {
+               const OSS = (await import('ali-oss')).default;
                const ossClient = new OSS(ossConfig);
                const fbPromises = rawGeneratedImages.map(async (imgUrl, i) => {
                   try {
