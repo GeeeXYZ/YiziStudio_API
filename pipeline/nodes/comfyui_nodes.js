@@ -59,7 +59,12 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
         comfyNode.inputs.index = orderContext.set_index || 0;
         comfyNode.inputs.lora_prompt = loraPrompt;
         comfyNode.inputs.prompt = orderContext.prompt || '';
-        comfyNode.inputs.auto_delivery = node.data.auto_delivery === true;
+        // Propagate node-level auto_delivery into orderContext for backend delivery decision
+        // (decoupled from ComfyUI — ComfyUI always calls back, backend decides whether to push to delivery pool)
+        if (node.data.auto_delivery === true) {
+          orderContext.auto_delivery = true;
+        }
+        comfyNode.inputs.auto_delivery = true; // Always tell ComfyUI to callback with results
         comfyNode.inputs.api_url = apiUrl; 
         comfyNode.inputs.token = pipelineToken;
         comfyNode.inputs.oss_address = directOssAddress;

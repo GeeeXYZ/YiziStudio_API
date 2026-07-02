@@ -234,7 +234,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
     if (pool) {
        await pool.query(
          'UPDATE "yizi_api_logs" SET status = $1, progress = $2, result_images = $3, error_msg = COALESCE($5, error_msg), updated_at = NOW() WHERE id = $4',
-         [finalStatus, totalNodes, JSON.stringify({ message: "Completed", final_images: imagesToSave }), pipelineLogId, errorMsgToSave]
+         [finalStatus, totalNodes, JSON.stringify({ message: "Completed", final_images: imagesToSave, auto_delivery: !!orderContext?.auto_delivery }), pipelineLogId, errorMsgToSave]
        ).catch(() => {});
     }
 

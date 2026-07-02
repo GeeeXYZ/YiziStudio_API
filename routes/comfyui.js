@@ -63,60 +63,89 @@ router.post('/comfyui/order/sts', authenticateToken, async (req, res) => {
   }
 });
 
-// 7.7 ComfyUI Dedicated API: Auto-delivery webhook from ImagesUploader_secured
+// 7.7 ComfyUI Dedicated API: Webhook callback from ImagesUploader_secured
+// Backend controls delivery decision — ComfyUI always calls back, this endpoint decides whether to push to delivery pool
 router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
   const { order_id, index, images } = req.body;
   if (!order_id || !images || !Array.isArray(images)) {
     return res.json({ msg: 'err', info: 'Missing required fields or invalid images format' });
   }
 
-  // ComfyUI may pass "openid.order_id" as order_id if token generation needs it, so handle split
+  // ComfyUI may pass "openid.order_id" as order_id, so handle split
   let actualOrderId = order_id;
+  let openidFromParam = null;
   if (order_id.includes('.')) {
-    actualOrderId = order_id.split('.').slice(1).join('.');
+    const parts = order_id.split('.');
+    openidFromParam = parts[0];
+    actualOrderId = parts.slice(1).join('.');
   }
 
   try {
     const pgClient = await pool.connect();
     try {
       await pgClient.query('BEGIN');
-      const selectRes = await pgClient.query('SELECT data FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [actualOrderId]);
+      // SELECT full row to get openid for SSE notifications
+      const selectRes = await pgClient.query('SELECT * FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [actualOrderId]);
       
       if (selectRes.rows.length === 0) {
         throw new Error('Order not found');
       }
 
-      const orderData = selectRes.rows[0].data || {};
+      const orderRow = selectRes.rows[0];
+      const orderData = orderRow.data || {};
+      const orderOpenid = orderRow.openid || openidFromParam || 'unknown';
       if (!orderData.sets) orderData.sets = [{}];
       const setIndex = parseInt(index) || 0;
       if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
-      
-      if (!orderData.sets[setIndex].delivery_imgs) {
-        orderData.sets[setIndex].delivery_imgs = [];
+
+      // Check auto_delivery from the latest pipeline log for this order (backend-controlled decision)
+      let autoDelivery = true; // Default: deliver (backward compatible with non-pipeline ComfyUI triggers)
+      try {
+        const logRes = await pgClient.query(
+          `SELECT result_images FROM yizi_api_logs WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1`,
+          [actualOrderId]
+        );
+        if (logRes.rows.length > 0) {
+          // If there's a pipeline log, check if auto_delivery was explicitly set in orderContext
+          // The pipeline stores auto_delivery state — if the pipeline ran without auto_delivery, don't push
+          const logData = logRes.rows[0].result_images;
+          if (logData && typeof logData === 'object' && logData.auto_delivery === false) {
+            autoDelivery = false;
+          }
+        }
+      } catch (logErr) {
+        console.warn('[ComfyUI Delivery] Could not check pipeline log for auto_delivery:', logErr.message);
       }
 
       const newDeliveryIds = [];
-      for (const imgUrl of images) {
-        const id = `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`;
-        newDeliveryIds.push(id);
-        orderData.sets[setIndex].delivery_imgs.push({
-          id,
-          img: imgUrl
-        });
+      if (autoDelivery) {
+        if (!orderData.sets[setIndex].delivery_imgs) {
+          orderData.sets[setIndex].delivery_imgs = [];
+        }
+        for (const imgUrl of images) {
+          const id = `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`;
+          newDeliveryIds.push(id);
+          orderData.sets[setIndex].delivery_imgs.push({ id, img: imgUrl });
+        }
+        await pgClient.query('UPDATE "yizi_orders" SET data = $1, wait_delivery = $2, updated_at = NOW() WHERE id = $3', [orderData, '0', actualOrderId]);
+        console.log(`[ComfyUI Delivery] Auto-delivery ON: Pushed ${images.length} images to delivery pool for order ${actualOrderId}`);
+      } else {
+        // Still update the order data (store images for gallery) but don't flip wait_delivery
+        await pgClient.query('UPDATE "yizi_orders" SET data = $1, updated_at = NOW() WHERE id = $2', [orderData, actualOrderId]);
+        console.log(`[ComfyUI Delivery] Auto-delivery OFF: ${images.length} images received but NOT pushed to delivery pool for order ${actualOrderId}`);
       }
 
-      await pgClient.query('UPDATE "yizi_orders" SET data = $1, wait_delivery = $2, updated_at = NOW() WHERE id = $3', [orderData, '0', actualOrderId]);
       await pgClient.query('COMMIT');
-      
-      console.log(`[ComfyUI Auto Delivery] Successfully saved ${images.length} images to order ${actualOrderId}`);
-      
-      // Notify Feishu and Frontend SSE
-      import('../events.js').then(({ orderEventEmitter }) => {
-        orderEventEmitter.emit('NOTIFY_DELIVERY_COMPLETE', { orderId: actualOrderId });
-        orderEventEmitter.emit(`orderUpdate:${row.openid}`, { orderId: actualOrderId, event: 'DELIVERY_UPDATE', freshDeliveryIds: newDeliveryIds });
-      }).catch(err => console.error('[Pipeline] Failed to load event emitter:', err));
 
-      res.json({ msg: 'ok', info: 'Delivery success' });
+      // Notify Frontend SSE
+      if (autoDelivery && newDeliveryIds.length > 0) {
+        import('../events.js').then(({ orderEventEmitter }) => {
+          orderEventEmitter.emit('NOTIFY_DELIVERY_COMPLETE', { orderId: actualOrderId });
+          orderEventEmitter.emit(`orderUpdate:${orderOpenid}`, { orderId: actualOrderId, event: 'DELIVERY_UPDATE', freshDeliveryIds: newDeliveryIds });
+        }).catch(err => console.error('[ComfyUI Delivery] Failed to load event emitter:', err));
+      }
+
+      res.json({ msg: 'ok', info: autoDelivery ? 'Delivery success' : 'Images received (auto-delivery off)' });
     } catch (err) {
       await pgClient.query('ROLLBACK');
       throw err;
