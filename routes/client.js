@@ -399,7 +399,24 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
               runPipeline(pipelineInput, orderContext, pool).catch(err => {
                 console.error(`[Auto Pipeline Error] Order ${orderId} Set ${index}:`, err.message);
               });
+
+              // Save the resolved slots back to the order data so it persists for regeneration
+              set.prompt_slots = [
+                { content: orderContext.prompt_slot_1 },
+                { content: orderContext.prompt_slot_2 },
+                { content: orderContext.prompt_slot_3 },
+                { content: orderContext.prompt_slot_4 }
+              ];
             }
+            // Update the global data as well
+            data.prompt_slots = [
+              { content: resolvedSlots[0] || '' },
+              { content: resolvedSlots[1] || '' },
+              { content: resolvedSlots[2] || '' },
+              { content: resolvedSlots[3] || '' }
+            ];
+            // Persist back to database
+            await pool.query('UPDATE "yizi_orders" SET data = $1 WHERE id = $2', [JSON.stringify(data), orderId]);
           }
         } else {
           console.warn(`[Auto Trigger] No workflow found for uuid=${skuData.workflow}`);
