@@ -64,18 +64,19 @@ const checkPermission = (requiredPermission) => {
   };
 };
 
-const checkLogicalModule = (logicalModule) => {
+const checkLogicalModule = (logicalModules) => {
   return async (req, res, next) => {
+    const modules = Array.isArray(logicalModules) ? logicalModules : [logicalModules];
     const action = req.params.action;
-    let requiredPermission = null;
+    let requiredSuffix = null;
 
     if (action.includes('list') || action.includes('get') || action === 'assets/list') {
-      requiredPermission = `${logicalModule}:read`;
-    } else if (action === 'add' || action === 'reset' || action === 'del' || action === 'trigger' || action === 'sts' || action === 'oss/delete') {
-      requiredPermission = `${logicalModule}:write`;
+      requiredSuffix = ':read';
+    } else if (action === 'add' || action === 'reset' || action === 'del' || action === 'trigger' || action === 'sts' || action === 'oss/delete' || action === 'refund') {
+      requiredSuffix = ':write';
     }
 
-    if (!requiredPermission) return next();
+    if (!requiredSuffix) return next();
 
     if (!req.user) return res.status(401).json({ msg: 'err', info: 'Unauthorized' });
     if (req.user.is_super) return next();
@@ -87,8 +88,11 @@ const checkLogicalModule = (logicalModule) => {
       if (roleRes.rows.length > 0 && roleRes.rows[0].permissions) {
         userPerms = typeof roleRes.rows[0].permissions === 'string' ? JSON.parse(roleRes.rows[0].permissions) : roleRes.rows[0].permissions;
       }
-      if (!userPerms.includes(requiredPermission)) {
-        return res.status(403).json({ msg: 'err', info: `Forbidden: 缺少关联模块必需权限 [${requiredPermission}]` });
+      
+      const hasAccess = modules.some(mod => userPerms.includes(`${mod}${requiredSuffix}`));
+      
+      if (!hasAccess) {
+        return res.status(403).json({ msg: 'err', info: `Forbidden: 缺少关联模块必需权限 [${modules.join(' or ')}${requiredSuffix}]` });
       }
       next();
     } catch (err) {

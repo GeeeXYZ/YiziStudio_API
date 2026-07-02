@@ -770,6 +770,10 @@ router.post('/admin/yizi_prompt_groups/:action(*)', authenticateToken, checkLogi
 router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_oss_delivery_imgs/:action(*)', authenticateToken, checkLogicalModule('workspace'), rpcHandler);
 
+// Shared Tables across multiple logical modules
+router.post('/admin/yizi_orders/:action(*)', authenticateToken, checkLogicalModule(['orders', 'workspace']), rpcHandler);
+router.post('/admin/yizi_comments/:action(*)', authenticateToken, checkLogicalModule(['orders', 'workspace']), rpcHandler);
+router.post('/admin/yizi_model/:action(*)', authenticateToken, checkLogicalModule(['model', 'workspace']), rpcHandler);
 // Generic RPC Fallback (Requires exact table permission)
 router.post(['/rpc/:module/:db_name/:action(*)', '/admin/:db_name/:action(*)', '/client/:db_name/:action(*)'], authenticateToken, checkRbacPermission, rpcHandler);
 
