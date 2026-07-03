@@ -19,7 +19,9 @@ export async function executeStringConcat(node, inputs) {
   const s2 = inputs.str2 || '';
   const s3 = inputs.str3 || '';
   const s4 = inputs.str4 || '';
-  return { output: [s1, s2, s3, s4].filter(s => typeof s === 'string' && s.trim() !== '').join('\n') };
+  const s5 = inputs.str5 || '';
+  const s6 = inputs.str6 || '';
+  return { output: [s1, s2, s3, s4, s5, s6].filter(s => typeof s === 'string' && s.trim() !== '').join('\n') };
 }
 
 export async function executeLlmCall(node, inputs, env, pool) {
