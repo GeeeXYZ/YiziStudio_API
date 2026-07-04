@@ -440,18 +440,18 @@ const rpcHandler = async (req, res) => {
       // Get page rows
       const pk = await getPrimaryKeyColumn(db_name);
       // Allow caller to specify sort column; fallback to pk
-      let orderBySql = `"${pk}" DESC`;
+      let orderBySql = `"${pk}" DESC NULLS LAST`;
       if (Array.isArray(params.sort_by)) {
         const validCols = await getTableColumns(db_name);
         const parts = [];
         for (const s of params.sort_by) {
           if (validCols.includes(s.column)) {
-            parts.push(`"${s.column}" ${s.dir && s.dir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}`);
+            parts.push(`"${s.column}" ${s.dir && s.dir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC NULLS LAST'}`);
           }
         }
         if (parts.length > 0) orderBySql = parts.join(', ');
       } else if (params.sort_by) {
-        const sortDir = (params.sort_dir && params.sort_dir.toUpperCase() === 'ASC') ? 'ASC' : 'DESC';
+        const sortDir = (params.sort_dir && params.sort_dir.toUpperCase() === 'ASC') ? 'ASC' : 'DESC NULLS LAST';
         orderBySql = `"${params.sort_by}" ${sortDir}`;
       }
       
