@@ -112,7 +112,15 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
         };
 
         // In test/simulate mode, we now execute all nodes normally so users can see real results
-        outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
+        try {
+          outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
+        } catch (nodeExecErr) {
+          traceLog.status = 'error';
+          traceLog.error = nodeExecErr.message;
+          traceLog.outputs = { _error: nodeExecErr.message };
+          traceLogs.push(traceLog);
+          throw nodeExecErr;
+        }
 
         try {
           context[node.id] = outputs;
