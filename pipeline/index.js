@@ -103,12 +103,26 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
         const inputs = resolveInputs(incomingEdges, context);
         let outputs = {};
         
+        const nodeNames = {
+          order_input: '解析订单参数', toolkit_input: '解析工作台参数',
+          preset_seedream: '大模型生图推理', preset_apiyi: '大模型生图推理',
+          preset_grsai: '大模型生图推理', comfy_remote: '投递到远程工作流',
+          oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
+          prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本',
+          string_concat: '文本拼接', llm_call: '大模型调用', http_request: 'HTTP 请求',
+          seedream: '生图推理', preset_openrouter: '大模型生图推理'
+        };
+
         const traceLog = {
           nodeId: node.id,
           nodeType: node.type,
+          friendlyName: nodeNames[node.type] || node.type,
+          step: completedNodes + 1,
           inputs: inputs,
           outputs: null,
-          status: 'success'
+          status: 'running',
+          startTime: Date.now(),
+          duration: 0
         };
 
         // In test/simulate mode, we now execute all nodes normally so users can see real results
@@ -118,6 +132,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
           traceLog.status = 'error';
           traceLog.error = nodeExecErr.message;
           traceLog.outputs = { _error: nodeExecErr.message };
+          traceLog.duration = Date.now() - traceLog.startTime;
           traceLogs.push(traceLog);
           throw nodeExecErr;
         }
@@ -125,17 +140,13 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
         try {
           context[node.id] = outputs;
           completedNodes++;
+          traceLog.step = completedNodes;
+          traceLog.status = 'success';
           traceLog.outputs = outputs;
+          traceLog.duration = Date.now() - traceLog.startTime;
           traceLogs.push(traceLog);
           
           if (pool && !simulate && completedNodes <= totalNodes) {
-             const nodeNames = {
-               order_input: '解析订单参数', toolkit_input: '解析工作台参数',
-               preset_seedream: '大模型生图推理', preset_apiyi: '大模型生图推理',
-               preset_grsai: '大模型生图推理', comfy_remote: '投递到远程工作流',
-               oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
-               prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本'
-             };
              const friendlyName = nodeNames[node.type] || '执行节点处理';
              pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [`${completedNodes}/${totalNodes} ${friendlyName}`, completedNodes, pipelineLogId]).catch(() => {});
           }
