@@ -111,12 +111,8 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
           status: 'success'
         };
 
-        if (simulate && ['comfy_remote', 'seedream', 'preset_seedream', 'preset_apiyi', 'preset_grsai', 'preset_openrouter', 'llm_call', 'oss_output', 'http_request'].includes(node.type)) {
-          console.log(`[Pipeline] [SIMULATE] Skipping heavy execution for ${node.type}`);
-          outputs = { _simulate: true, msg: "Skipped in dry run" };
-        } else {
-          outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
-        }
+        // In test/simulate mode, we now execute all nodes normally so users can see real results
+        outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
 
         try {
           context[node.id] = outputs;
