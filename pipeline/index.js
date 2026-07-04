@@ -308,10 +308,10 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
 
     if (pipelineError) {
       console.warn(`[Pipeline] Partial failure: ${failures.length} node(s) failed, but ${imagesToSave.length} images were saved successfully.`);
-      return { success: true, partial: true, images: imagesToSave, failed_uploads: allFailedUploads, error: pipelineError.message };
+      return { success: true, partial: true, images: imagesToSave, failed_uploads: allFailedUploads, error: pipelineError.message, traceLogs };
     }
 
-    return { success: true, images: imagesToSave, failed_uploads: allFailedUploads };
+    return { success: true, images: imagesToSave, failed_uploads: allFailedUploads, traceLogs };
 
   } catch (error) {
     console.error(`[Pipeline] Fatal error during pipeline execution:`, error);
@@ -321,6 +321,6 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
          ['failed', error.message, pipelineLogId]
        ).catch(() => {});
     }
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, traceLogs };
   }
 }
