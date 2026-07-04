@@ -35,6 +35,13 @@ export async function executeLlmCall(node, inputs, env, pool) {
   const systemPrompt = node.data.system_prompt || '';
   const llmPrompt = inputs.prompt || inputs.input || '';
   
+  // Determine API format: 'openai' (default) or 'doubao'
+  // Auto-detect from URL if not explicitly set
+  let apiFormat = node.data.api_format || 'auto';
+  if (apiFormat === 'auto') {
+    apiFormat = (llmUrl.includes('volces.com') || llmUrl.includes('volcengine')) ? 'doubao' : 'openai';
+  }
+  
   if (!llmKey) throw new Error(`LLM Node missing API Key. Set it in node data, env LLM_API_KEY, or global settings.`);
 
   // Collect ordered image inputs: image_1, image_2, image_3, ... (preserves order)
@@ -54,65 +61,117 @@ export async function executeLlmCall(node, inputs, env, pool) {
     images = legacy.flat().filter(Boolean);
   }
 
-  // Build message content
-  let userContent;
-  if (images.length > 0) {
-    // Vision mode: multimodal content array
-    const contentParts = [];
+  if (apiFormat === 'doubao') {
+    // ========== 豆包 / 火山引擎 Responses API ==========
+    const inputContent = [];
+    
+    // Add image parts first (doubao format)
+    for (const url of images) {
+      if (!url) continue;
+      inputContent.push({ type: 'input_image', image_url: url });
+    }
     
     // Add text part
     if (llmPrompt) {
-      contentParts.push({ type: 'text', text: llmPrompt });
+      inputContent.push({ type: 'input_text', text: llmPrompt });
     }
 
-    // Add image parts
-    for (const url of images) {
-      if (!url) continue;
-      if (url.startsWith('data:image')) {
-        // Already base64
-        contentParts.push({ type: 'image_url', image_url: { url } });
-      } else {
-        // URL — convert to base64 for maximum compatibility
-        try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
-          if (!resp.ok) {
-            console.warn(`[LLM Vision] Failed to fetch image: ${url.substring(0, 80)}`);
-            continue;
+    const inputMessages = [];
+    if (systemPrompt) {
+      inputMessages.push({ role: 'system', content: [{ type: 'input_text', text: systemPrompt }] });
+    }
+    inputMessages.push({
+      role: 'user',
+      content: images.length > 0 ? inputContent : llmPrompt
+    });
+
+    // Build endpoint: if URL already ends with /responses, use as-is; otherwise append
+    let endpoint = llmUrl;
+    if (!endpoint.endsWith('/responses')) {
+      endpoint = endpoint.replace(/\/+$/, '') + '/responses';
+    }
+
+    console.log(`[Pipeline] LLM Doubao Call to ${endpoint}, model: ${llmModel}, images: ${images.length}`);
+
+    const chatRes = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
+      body: JSON.stringify({ model: llmModel, input: inputMessages }),
+      signal: AbortSignal.timeout(120000)
+    });
+
+    if (!chatRes.ok) throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
+
+    const chatData = await chatRes.json();
+    
+    // Parse doubao response: output[].content[].text
+    let resultText = '';
+    if (chatData.output && Array.isArray(chatData.output)) {
+      for (const item of chatData.output) {
+        if (item.type === 'message' && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === 'output_text' && part.text) {
+              resultText += part.text;
+            }
           }
-          const arrayBuffer = await resp.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          const base64 = buffer.toString('base64');
-          // Detect mime type from first bytes
-          const mime = buffer[0] === 0x89 ? 'image/png' : buffer[0] === 0xFF ? 'image/jpeg' : buffer[0] === 0x52 ? 'image/webp' : 'image/jpeg';
-          contentParts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
-        } catch (imgErr) {
-          console.warn(`[LLM Vision] Failed to process image ${url.substring(0, 80)}:`, imgErr.message);
         }
       }
     }
-    userContent = contentParts;
-    console.log(`[Pipeline] LLM Vision Call to ${llmUrl}/chat/completions, model: ${llmModel}, images: ${images.length}`);
+    // Fallback: try OpenAI-style response in case doubao returns compatible format
+    if (!resultText && chatData.choices) {
+      resultText = chatData.choices?.[0]?.message?.content || '';
+    }
+    return { output: resultText };
+
   } else {
-    // Text-only mode
-    userContent = llmPrompt;
-    console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions, model: ${llmModel}`);
+    // ========== OpenAI Chat Completions API ==========
+    let userContent;
+    if (images.length > 0) {
+      const contentParts = [];
+      if (llmPrompt) {
+        contentParts.push({ type: 'text', text: llmPrompt });
+      }
+      for (const url of images) {
+        if (!url) continue;
+        if (url.startsWith('data:image')) {
+          contentParts.push({ type: 'image_url', image_url: { url } });
+        } else {
+          try {
+            const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) { console.warn(`[LLM Vision] Failed to fetch image: ${url.substring(0, 80)}`); continue; }
+            const arrayBuffer = await resp.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const base64 = buffer.toString('base64');
+            const mime = buffer[0] === 0x89 ? 'image/png' : buffer[0] === 0xFF ? 'image/jpeg' : buffer[0] === 0x52 ? 'image/webp' : 'image/jpeg';
+            contentParts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
+          } catch (imgErr) {
+            console.warn(`[LLM Vision] Failed to process image ${url.substring(0, 80)}:`, imgErr.message);
+          }
+        }
+      }
+      userContent = contentParts;
+      console.log(`[Pipeline] LLM Vision Call to ${llmUrl}/chat/completions, model: ${llmModel}, images: ${images.length}`);
+    } else {
+      userContent = llmPrompt;
+      console.log(`[Pipeline] LLM Call to ${llmUrl}/chat/completions, model: ${llmModel}`);
+    }
+
+    const messages = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: userContent });
+
+    const chatRes = await fetch(`${llmUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
+      body: JSON.stringify({ model: llmModel, messages }),
+      signal: AbortSignal.timeout(120000)
+    });
+
+    if (!chatRes.ok) throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
+
+    const chatData = await chatRes.json();
+    return { output: chatData.choices?.[0]?.message?.content || '' };
   }
-
-  const messages = [];
-  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-  messages.push({ role: 'user', content: userContent });
-
-  const chatRes = await fetch(`${llmUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
-    body: JSON.stringify({ model: llmModel, messages }),
-    signal: AbortSignal.timeout(120000)
-  });
-
-  if (!chatRes.ok) throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
-
-  const chatData = await chatRes.json();
-  return { output: chatData.choices?.[0]?.message?.content || '' };
 }
 
 export async function executePromptLibrary(node, inputs, pool, executionState) {

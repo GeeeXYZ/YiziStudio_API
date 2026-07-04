@@ -347,7 +347,7 @@ router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
     return res.json({ msg: 'ok', data: result });
   } catch (err) {
     console.error('[Pipeline Test Error]', err);
-    return res.status(500).json({ error: err.message });
+    return res.json({ msg: 'err', info: err.message, traceLogs: err.traceLogs || [] });
   }
 });
 
