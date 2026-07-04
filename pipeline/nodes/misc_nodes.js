@@ -2,6 +2,10 @@ export async function executeImagePreview(node, inputs) {
   return { output: inputs.image_url || inputs.output || node.data.preview_url || '' };
 }
 
+export async function executeTextPreview(node, inputs) {
+  return { output: inputs.text || inputs.output || node.data.preview_text || '' };
+}
+
 export async function executeHttpRequest(node, inputs) {
   const method = node.data.method || 'GET';
   const reqUrl = inputs.url || node.data.url;

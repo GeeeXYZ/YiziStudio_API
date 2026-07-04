@@ -4,7 +4,7 @@ import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCa
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
 import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset } from './nodes/image_api_nodes.js';
 import { executeOssOutput } from './nodes/output_nodes.js';
-import { executeImagePreview, executeHttpRequest } from './nodes/misc_nodes.js';
+import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { uploadToOSS } from './core/oss_helper.js';
 
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
@@ -29,6 +29,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'prompt_library': return await executePromptLibrary(node, inputs, pool, executionState);
     
     case 'image_preview': return await executeImagePreview(node, inputs);
+    case 'text_preview': return await executeTextPreview(node, inputs);
     case 'comfy_remote': return await executeComfyRemote(node, inputs, orderContext, env, pool);
     case 'oss_output': return await executeOssOutput(node, inputs, orderContext, env);
     case 'http_request': return await executeHttpRequest(node, inputs);
@@ -129,7 +130,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
                preset_seedream: '大模型生图推理', preset_apiyi: '大模型生图推理',
                preset_grsai: '大模型生图推理', comfy_remote: '投递到远程工作流',
                oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
-               prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像'
+               prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本'
              };
              const friendlyName = nodeNames[node.type] || '执行节点处理';
              pool.query(`UPDATE yizi_api_logs SET status = $1, progress = $2, updated_at = NOW() WHERE id = $3`, [`${completedNodes}/${totalNodes} ${friendlyName}`, completedNodes, pipelineLogId]).catch(() => {});
