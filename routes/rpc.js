@@ -440,12 +440,24 @@ const rpcHandler = async (req, res) => {
       // Get page rows
       const pk = await getPrimaryKeyColumn(db_name);
       // Allow caller to specify sort column; fallback to pk
-      const orderByCol = params.sort_by || pk;
-      const sortDir = (params.sort_dir && params.sort_dir.toUpperCase() === 'ASC') ? 'ASC' : 'DESC';
+      let orderBySql = `"${pk}" DESC`;
+      if (Array.isArray(params.sort_by)) {
+        const validCols = await getTableColumns(db_name);
+        const parts = [];
+        for (const s of params.sort_by) {
+          if (validCols.includes(s.column)) {
+            parts.push(`"${s.column}" ${s.dir && s.dir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}`);
+          }
+        }
+        if (parts.length > 0) orderBySql = parts.join(', ');
+      } else if (params.sort_by) {
+        const sortDir = (params.sort_dir && params.sort_dir.toUpperCase() === 'ASC') ? 'ASC' : 'DESC';
+        orderBySql = `"${params.sort_by}" ${sortDir}`;
+      }
       
       const limitIdx = placeholderIdx;
       const offsetIdx = placeholderIdx + 1;
-      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY "${orderByCol}" ${sortDir} LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const listQuery = `SELECT * FROM "${db_name}" ${whereSql} ORDER BY ${orderBySql} LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
       const result = await pool.query(listQuery, [...values, pageSize, (page - 1) * pageSize]);
       
       let listData = result.rows.map(unpackRow);
