@@ -445,7 +445,7 @@ const rpcHandler = async (req, res) => {
         const validCols = await getTableColumns(db_name);
         const parts = [];
         for (const s of params.sort_by) {
-          if (validCols.includes(s.column)) {
+          if (validCols.includes(s.column) || s.column === 'refunded') {
             let dirStr = 'DESC NULLS LAST';
             if (s.dir) {
               const upperDir = s.dir.toUpperCase();
@@ -453,7 +453,11 @@ const rpcHandler = async (req, res) => {
               else if (upperDir === 'ASC') dirStr = 'ASC';
               else if (upperDir === 'DESC NULLS FIRST') dirStr = 'DESC NULLS FIRST';
             }
-            parts.push(`"${s.column}" ${dirStr}`);
+            let colName = `"${s.column}"`;
+            if (s.column === 'refunded') {
+              colName = `data->>'refunded'`;
+            }
+            parts.push(`${colName} ${dirStr}`);
           }
         }
         if (parts.length > 0) orderBySql = parts.join(', ');
