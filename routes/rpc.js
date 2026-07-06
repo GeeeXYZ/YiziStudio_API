@@ -446,7 +446,14 @@ const rpcHandler = async (req, res) => {
         const parts = [];
         for (const s of params.sort_by) {
           if (validCols.includes(s.column)) {
-            parts.push(`"${s.column}" ${s.dir && s.dir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC NULLS LAST'}`);
+            let dirStr = 'DESC NULLS LAST';
+            if (s.dir) {
+              const upperDir = s.dir.toUpperCase();
+              if (upperDir === 'ASC NULLS FIRST') dirStr = 'ASC NULLS FIRST';
+              else if (upperDir === 'ASC') dirStr = 'ASC';
+              else if (upperDir === 'DESC NULLS FIRST') dirStr = 'DESC NULLS FIRST';
+            }
+            parts.push(`"${s.column}" ${dirStr}`);
           }
         }
         if (parts.length > 0) orderBySql = parts.join(', ');
