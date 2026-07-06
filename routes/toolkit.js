@@ -363,6 +363,52 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
   }
 });
 
+// GET /toolkit/prompts/all — Pull full prompt library tree
+router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const groupsRes = await client.query('SELECT id, name FROM "yizi_prompt_groups" ORDER BY created_at ASC');
+    const setsRes = await client.query('SELECT id, group_id, title, data FROM "yizi_prompt_sets" ORDER BY created_at ASC');
+    const promptsRes = await client.query('SELECT id, set_id, content, data FROM "yizi_prompts" ORDER BY created_at ASC');
+    
+    // Assemble the tree
+    const groupsMap = {};
+    const setsMap = {};
+    
+    const resultTree = [];
+    
+    groupsRes.rows.forEach(g => {
+      const group = { id: g.id, name: g.name, sets: [] };
+      groupsMap[g.id] = group;
+      resultTree.push(group);
+    });
+    
+    setsRes.rows.forEach(s => {
+      const set = { id: s.id, group_id: s.group_id, title: s.title, data: s.data || {}, prompts: [] };
+      setsMap[s.id] = set;
+      if (groupsMap[s.group_id]) {
+        groupsMap[s.group_id].sets.push(set);
+      } else {
+        // Handle orphaned sets if any by ignoring or we could push to a default group
+      }
+    });
+    
+    promptsRes.rows.forEach(p => {
+      const prompt = { id: p.id, set_id: p.set_id, content: p.content, data: p.data || {} };
+      if (setsMap[p.set_id]) {
+        setsMap[p.set_id].prompts.push(prompt);
+      }
+    });
+    
+    res.json({ msg: 'ok', data: resultTree });
+  } catch (err) {
+    console.error('[Prompt Pull Error]', err);
+    res.json({ msg: 'err', info: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;
 
 // POST /toolkit/vision_api/execute_async
