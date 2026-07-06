@@ -563,6 +563,12 @@ const rpcHandler = async (req, res) => {
           console.warn(`[Bulletproof API] Dropped unknown fields for table ${db_name}: ${Object.keys(extraData).join(', ')}`);
         }
 
+        // Auto-inject updated_at for prompt library tables
+        const PROMPT_TABLES = ['yizi_prompt_sets', 'yizi_prompt_groups', 'yizi_prompts'];
+        if (PROMPT_TABLES.includes(db_name) && allowedCols.includes('updated_at') && !finalData['updated_at']) {
+          finalData['updated_at'] = new Date().toISOString();
+        }
+
         const fields = Object.keys(finalData);
         const values = Object.values(finalData).map(prepareQueryValue);
         
@@ -651,6 +657,12 @@ const rpcHandler = async (req, res) => {
           finalData['data'] = JSON.stringify({ ...existingData, ...extraData });
         } else if (Object.keys(extraData).length > 0) {
           console.warn(`[Bulletproof API] Dropped unknown update fields for table ${db_name}: ${Object.keys(extraData).join(', ')}`);
+        }
+
+        // Auto-inject updated_at for prompt library tables
+        const PROMPT_TABLES = ['yizi_prompt_sets', 'yizi_prompt_groups', 'yizi_prompts'];
+        if (PROMPT_TABLES.includes(db_name) && allowedCols.includes('updated_at')) {
+          finalData['updated_at'] = new Date().toISOString();
         }
 
         const fields = Object.keys(finalData);

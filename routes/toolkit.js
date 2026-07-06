@@ -53,11 +53,39 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
 
 // POST /toolkit/grsai — Direct Grsai API call from Toolkit (no pipeline, synchronous polling)
 router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts:write'), async (req, res) => {
-  const { groups, sets, prompts } = req.body;
+  const { groups, sets, prompts, client_updated_at, force_override } = req.body;
   if (!Array.isArray(prompts)) return res.json({ msg: 'err', info: 'Invalid data format. Expected prompts array.' });
   
   const client = await pool.connect();
   try {
+    // Check conflict BEFORE starting transaction if client_updated_at is provided
+    if (client_updated_at && !force_override) {
+      try {
+        const maxGroupRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompt_groups"');
+        const maxSetRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompt_sets"');
+        const maxPromptRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompts"');
+        
+        const maxVals = [
+          maxGroupRes.rows[0]?.max_val,
+          maxSetRes.rows[0]?.max_val,
+          maxPromptRes.rows[0]?.max_val
+        ].map(d => d ? new Date(d).getTime() : 0);
+        
+        const server_updated_at = Math.max(...maxVals, 0);
+        
+        if (server_updated_at > client_updated_at) {
+          client.release();
+          return res.status(409).json({ 
+            msg: 'conflict', 
+            info: '云端内容已更新，请决定是否强制覆盖。',
+            server_updated_at 
+          });
+        }
+      } catch (err) {
+        // Table might not exist yet during first sync, safe to ignore conflict check
+      }
+    }
+
     await client.query('BEGIN');
     
     // Database schema migration
@@ -95,7 +123,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompt_groups" (
       id VARCHAR(255) PRIMARY KEY,
       name VARCHAR(255),
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
     )`);
     
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompt_sets" (
@@ -103,7 +132,8 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       group_id VARCHAR(255),
       title VARCHAR(255),
       data JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
     )`);
     
     await client.query(`CREATE TABLE IF NOT EXISTS "yizi_prompts" (
@@ -111,8 +141,14 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       set_id VARCHAR(255),
       content TEXT,
       data JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
     )`);
+    
+    // Add updated_at to existing tables if they don't have it
+    await client.query(`ALTER TABLE "yizi_prompt_groups" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompt_sets" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
 
     // Phase 1: UPSERT Groups
     let groupsSynced = 0;
@@ -120,9 +156,9 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       for (const g of groups) {
         if (!g.id || !g.name) continue;
         const insertGroupQuery = `
-          INSERT INTO "yizi_prompt_groups" (id, name)
-          VALUES ($1, $2)
-          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+          INSERT INTO "yizi_prompt_groups" (id, name, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
         `;
         await client.query(insertGroupQuery, [g.id, g.name]);
         groupsSynced++;
@@ -167,10 +203,10 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
         }
 
         const insertSetQuery = `
-          INSERT INTO "yizi_prompt_sets" (id, group_id, title, data)
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO "yizi_prompt_sets" (id, group_id, title, data, updated_at)
+          VALUES ($1, $2, $3, $4, NOW())
           ON CONFLICT (id) DO UPDATE 
-          SET group_id = EXCLUDED.group_id, title = EXCLUDED.title, data = EXCLUDED.data
+          SET group_id = EXCLUDED.group_id, title = EXCLUDED.title, data = EXCLUDED.data, updated_at = NOW()
         `;
         const groupId = s.group_id || "";
         await client.query(insertSetQuery, [s.id, groupId, s.name, s.data || {}]);
@@ -213,18 +249,27 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       }
 
       const insertPromptQuery = `
-        INSERT INTO "yizi_prompts" (id, set_id, content, data)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO "yizi_prompts" (id, set_id, content, data, updated_at)
+        VALUES ($1, $2, $3, $4, NOW())
         ON CONFLICT (id) DO UPDATE 
-        SET content = EXCLUDED.content, set_id = EXCLUDED.set_id, data = EXCLUDED.data
+        SET content = EXCLUDED.content, set_id = EXCLUDED.set_id, data = EXCLUDED.data, updated_at = NOW()
       `;
       await client.query(insertPromptQuery, [p.id, p.set_id, p.content, p.data || {}]);
     }
     
     await client.query('COMMIT');
+    
+    // Fetch latest timestamp to return
+    const maxGroupRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompt_groups"');
+    const maxSetRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompt_sets"');
+    const maxPromptRes = await client.query('SELECT MAX(updated_at) as max_val FROM "yizi_prompts"');
+    const maxVals = [maxGroupRes.rows[0]?.max_val, maxSetRes.rows[0]?.max_val, maxPromptRes.rows[0]?.max_val].map(d => d ? new Date(d).getTime() : 0);
+    const new_server_updated_at = Math.max(...maxVals, 0);
+
     res.json({ 
       msg: 'ok', 
       info: `Synced ${groupsSynced} groups, ${setsSynced} sets, and ${prompts.length} prompts successfully.`,
+      server_updated_at: new_server_updated_at,
       result: { groups: groupsSynced, sets: setsSynced, prompts: prompts.length }
     });
   } catch (err) {
@@ -367,10 +412,16 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
 router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
-    const groupsRes = await client.query('SELECT id, name FROM "yizi_prompt_groups" ORDER BY created_at ASC');
-    const setsRes = await client.query('SELECT id, group_id, title, data FROM "yizi_prompt_sets" ORDER BY created_at ASC');
-    const promptsRes = await client.query('SELECT id, set_id, content, data FROM "yizi_prompts" ORDER BY created_at ASC');
+    // Ensure columns exist for first-time callers
+    await client.query(`ALTER TABLE "yizi_prompt_groups" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompt_sets" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+
+    const groupsRes = await client.query('SELECT id, name, updated_at FROM "yizi_prompt_groups" ORDER BY created_at ASC');
+    const setsRes = await client.query('SELECT id, group_id, title, data, updated_at FROM "yizi_prompt_sets" ORDER BY created_at ASC');
+    const promptsRes = await client.query('SELECT id, set_id, content, data, updated_at FROM "yizi_prompts" ORDER BY created_at ASC');
     
+    let global_updated_at = 0;
     // Assemble the tree
     const groupsMap = {};
     const setsMap = {};
@@ -378,13 +429,19 @@ router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
     const resultTree = [];
     
     groupsRes.rows.forEach(g => {
-      const group = { id: g.id, name: g.name, sets: [] };
+      const gTime = g.updated_at ? new Date(g.updated_at).getTime() : 0;
+      if (gTime > global_updated_at) global_updated_at = gTime;
+      
+      const group = { id: g.id, name: g.name, updated_at: gTime, sets: [] };
       groupsMap[g.id] = group;
       resultTree.push(group);
     });
     
     setsRes.rows.forEach(s => {
-      const set = { id: s.id, group_id: s.group_id, title: s.title, data: s.data || {}, prompts: [] };
+      const sTime = s.updated_at ? new Date(s.updated_at).getTime() : 0;
+      if (sTime > global_updated_at) global_updated_at = sTime;
+      
+      const set = { id: s.id, group_id: s.group_id, title: s.title, data: s.data || {}, updated_at: sTime, prompts: [] };
       setsMap[s.id] = set;
       if (groupsMap[s.group_id]) {
         groupsMap[s.group_id].sets.push(set);
@@ -394,13 +451,16 @@ router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
     });
     
     promptsRes.rows.forEach(p => {
-      const prompt = { id: p.id, set_id: p.set_id, content: p.content, data: p.data || {} };
+      const pTime = p.updated_at ? new Date(p.updated_at).getTime() : 0;
+      if (pTime > global_updated_at) global_updated_at = pTime;
+      
+      const prompt = { id: p.id, set_id: p.set_id, content: p.content, data: p.data || {}, updated_at: pTime };
       if (setsMap[p.set_id]) {
         setsMap[p.set_id].prompts.push(prompt);
       }
     });
     
-    res.json({ msg: 'ok', data: resultTree });
+    res.json({ msg: 'ok', global_updated_at, data: resultTree });
   } catch (err) {
     console.error('[Prompt Pull Error]', err);
     res.json({ msg: 'err', info: err.message });
