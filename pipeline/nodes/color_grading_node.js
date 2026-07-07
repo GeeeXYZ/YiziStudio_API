@@ -2,8 +2,13 @@ import sharp from 'sharp';
 
 export async function executeColorGrading(node, inputs) {
   // 1. Get input image (URL or Base64)
-  const imageUrl = inputs.image || node.data.image || inputs.input || '';
-  if (!imageUrl) throw new Error('ColorGrading: Missing input image');
+  let rawImage = inputs.image || node.data.image || inputs.input || '';
+  if (Array.isArray(rawImage)) rawImage = rawImage.flat().filter(Boolean)[0];
+  const imageUrl = rawImage || '';
+  
+  if (typeof imageUrl !== 'string' || !imageUrl) {
+    throw new Error('ColorGrading: Missing or invalid input image');
+  }
 
   // 2. Get adjustment parameters (with defaults)
   const brightness = parseFloat(inputs.brightness ?? node.data.brightness ?? 1.0); // 0.5 - 2.0
