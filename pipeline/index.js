@@ -5,6 +5,7 @@ import { executeComfyRemote } from './nodes/comfyui_nodes.js';
 import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset } from './nodes/image_api_nodes.js';
 import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
+import { executeColorGrading } from './nodes/color_grading_node.js';
 import { uploadToOSS } from './core/oss_helper.js';
 
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
@@ -33,6 +34,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'comfy_remote': return await executeComfyRemote(node, inputs, orderContext, env, pool);
     case 'oss_output': return await executeOssOutput(node, inputs, orderContext, env);
     case 'http_request': return await executeHttpRequest(node, inputs);
+    case 'color_grading': return await executeColorGrading(node, inputs);
     
     default:
       console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);

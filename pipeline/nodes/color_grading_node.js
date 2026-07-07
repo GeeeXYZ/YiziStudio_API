@@ -1,0 +1,84 @@
+import sharp from 'sharp';
+
+export async function executeColorGrading(node, inputs) {
+  // 1. Get input image (URL or Base64)
+  const imageUrl = inputs.image || node.data.image || inputs.input || '';
+  if (!imageUrl) throw new Error('ColorGrading: Missing input image');
+
+  // 2. Get adjustment parameters (with defaults)
+  const brightness = parseFloat(inputs.brightness ?? node.data.brightness ?? 1.0); // 0.5 - 2.0
+  const contrast = parseFloat(inputs.contrast ?? node.data.contrast ?? 1.0);       // 0.5 - 2.0
+  const temperature = parseFloat(inputs.temperature ?? node.data.temperature ?? 0); // -100 to 100
+  const noise = parseFloat(inputs.noise ?? node.data.noise ?? 0);                 // 0 to 100
+  const sharpen = parseFloat(inputs.sharpen ?? node.data.sharpen ?? 0);             // 0 to 10
+
+  // 3. Fetch the image buffer
+  let buffer;
+  if (imageUrl.startsWith('data:image')) {
+    buffer = Buffer.from(imageUrl.split(',')[1], 'base64');
+  } else {
+    const resp = await fetch(imageUrl);
+    if (!resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl}`);
+    buffer = Buffer.from(await resp.arrayBuffer());
+  }
+
+  let imgInstance = sharp(buffer);
+  const metadata = await imgInstance.metadata();
+
+  // A. Brightness (using modulate)
+  if (brightness !== 1.0) {
+    imgInstance = imgInstance.modulate({ brightness });
+  }
+
+  // B. Contrast (using linear transformation)
+  // Formula: Output = slope * Input + intercept
+  // intercept ensures the middle gray (128) remains unchanged
+  if (contrast !== 1.0) {
+    const slope = contrast;
+    const intercept = 128 * (1 - contrast);
+    imgInstance = imgInstance.linear(slope, intercept);
+  }
+
+  // C. Color Temperature (using recomb matrix)
+  if (temperature !== 0) {
+    const temp = temperature / 100; // normalize to -1 to 1
+    // Warm: increase red/green, decrease blue
+    // Cool: decrease red/green, increase blue
+    const rGain = 1 + (temp > 0 ? temp * 0.08 : temp * 0.04);
+    const gGain = 1 + (temp > 0 ? temp * 0.02 : -temp * 0.02);
+    const bGain = 1 + (temp > 0 ? -temp * 0.08 : -temp * 0.12);
+
+    imgInstance = imgInstance.recomb([
+      [rGain, 0, 0],
+      [0, gGain, 0],
+      [0, 0, bGain]
+    ]);
+  }
+
+  // D. Sharpening
+  if (sharpen > 0) {
+    imgInstance = imgInstance.sharpen({ sigma: sharpen });
+  }
+
+  // E. Noise (SVG Overlay)
+  if (noise > 0) {
+    // Limit max noise opacity so it doesn't completely destroy the image
+    const noiseOpacity = (noise / 100) * 0.35; 
+    const svgNoise = Buffer.from(`
+      <svg width="${metadata.width}" height="${metadata.height}">
+        <filter id="noise">
+          <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" result="noise" />
+          <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${noiseOpacity} 0" />
+        </filter>
+        <rect width="100%" height="100%" filter="url(#noise)" fill="none" />
+      </svg>
+    `);
+    imgInstance = imgInstance.composite([{ input: svgNoise, blend: 'overlay' }]);
+  }
+
+  // 4. Output processed image as Base64
+  const outBuffer = await imgInstance.jpeg({ quality: 95 }).toBuffer();
+  const outputBase64 = `data:image/jpeg;base64,${outBuffer.toString('base64')}`;
+
+  return { output: outputBase64 };
+}
