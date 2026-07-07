@@ -475,11 +475,32 @@ router.get('/client/order/events', authenticateToken, (req, res) => {
 router.post('/client/order/list', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
   try {
+    // Pre-fetch SKU and model name maps for enriching orders missing planTitle/model_name
+    const skuPk = await getPrimaryKeyColumn('yizi_sku');
+    const [skuRows, modelRows] = await Promise.all([
+      pool.query(`SELECT "${skuPk}", title FROM "yizi_sku"`),
+      pool.query('SELECT uuid, title FROM "yizi_model"')
+    ]);
+    const skuMap = {};
+    skuRows.rows.forEach(s => skuMap[s[skuPk]] = s.title);
+    const modelMap = {};
+    modelRows.rows.forEach(m => modelMap[m.uuid] = m.title);
+
     const result = await pool.query(
       'SELECT * FROM "yizi_orders" WHERE openid = $1 OR phone = $2 ORDER BY datetime DESC',
       [unionid, req.user.phone || '']
     );
-    const list = result.rows.map(row => formatOrderRow(row));
+    const list = result.rows.map(row => {
+      const formatted = formatOrderRow(row);
+      // Inject resolved names if the order's data doesn't already have them
+      if (formatted.data && !formatted.data.planTitle && formatted.data.planId && skuMap[formatted.data.planId]) {
+        formatted.data.planTitle = skuMap[formatted.data.planId];
+      }
+      if (formatted.data && !formatted.data.model_name && formatted.data.model_uuid && modelMap[formatted.data.model_uuid]) {
+        formatted.data.model_name = modelMap[formatted.data.model_uuid];
+      }
+      return formatted;
+    });
     res.json({ msg: 'ok', result: list });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
@@ -703,6 +724,12 @@ router.post('/client/gallery/list', authenticateToken, async (req, res) => {
     const modelMap = {};
     modelsRes.rows.forEach(m => modelMap[m.uuid] = m.title);
 
+    // Also pre-fetch template/SKU names for resolving planId -> name
+    const skuPk = await getPrimaryKeyColumn('yizi_sku');
+    const skuRes = await pool.query(`SELECT "${skuPk}", title FROM "yizi_sku"`);
+    const skuMap = {};
+    skuRes.rows.forEach(s => skuMap[s[skuPk]] = s.title);
+
     const result = await pool.query(`
       SELECT g.id, g.oss_url as url, g.order_id, g.created_at, o.data as order_data 
       FROM "yizi_gallery" g 
@@ -723,8 +750,8 @@ router.post('/client/gallery/list', authenticateToken, async (req, res) => {
             url: row.url,
             orderId: row.order_id,
             date: row.created_at,
-            model: modelMap[orderData.model_uuid] || orderData.model_uuid || 'Unknown',
-            template: orderData.planTitle || 'Unknown',
+            model: modelMap[orderData.model_uuid] || orderData.model_name || orderData.model_uuid || 'Unknown',
+            template: orderData.planTitle || skuMap[orderData.planId] || 'Unknown',
             sourceImages: orderData.sets?.[0]?.images?.filter(i=>i) || []
         };
     });
