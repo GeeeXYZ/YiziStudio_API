@@ -777,64 +777,61 @@ router.post('/client/sku/prompts', authenticateToken, async (req, res) => {
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
-// Get model poses filtered by plan body type
-router.post('/client/model/:uuid/poses', authenticateToken, async (req, res) => {
-  const { uuid } = req.params;
-  const { planId } = req.body;
+});
 
+// POST /client/model/poses — Get pose images for a model+template combination
+router.post('/client/model/poses', authenticateToken, async (req, res) => {
   try {
-    // 1. Fetch model poses columns
-    const modelRes = await pool.query('SELECT poses, half_poses, spacial_poses FROM "yizi_model" WHERE uuid = $1', [uuid]);
-    if (modelRes.rows.length === 0) {
-      return res.json({ msg: 'err', info: 'Model not found' });
-    }
-    const model = modelRes.rows[0];
+    const { model_uuid, planId } = req.body;
+    if (!model_uuid) return res.json({ msg: 'ok', result: [] });
 
-    // 2. Resolve which pose column to use based on SKU template's body_type/pose_folder
-    let colName = 'poses'; // default to full body
+    // 1. Resolve body_type from SKU plan → correct pose column
+    let colName = 'poses'; // default: fullbody
     if (planId) {
-      const skuPk = await getPrimaryKeyColumn('yizi_sku');
-      const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [planId]);
-      if (skuRes.rows.length > 0) {
-        let skuData = {};
-        try {
-          skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
-        } catch (e) {}
-
-        const bodyType = skuData.body_type || '';
-        const poseFolder = skuData.pose_folder || '';
-
-        if (bodyType === '半身' || poseFolder === 'half_poses') {
-          colName = 'half_poses';
-        } else if (bodyType === '特殊' || poseFolder === 'special_poses') {
-          colName = 'spacial_poses';
+      try {
+        const skuRes = await pool.query('SELECT data FROM yizi_front_sku_settings WHERE id = $1', ['1']);
+        const plans = skuRes.rows[0]?.data?.plans || [];
+        const plan = plans.find(p => p.id === planId);
+        if (plan) {
+          if (plan.body_type === '半身') colName = 'half_poses';
+          else if (plan.body_type === '特殊') colName = 'spacial_poses';
+          // Allow explicit pose_folder override from SKU config
+          if (plan.pose_folder) {
+            const folderToCol = { 'poses': 'poses', 'half_poses': 'half_poses', 'special_poses': 'spacial_poses' };
+            colName = folderToCol[plan.pose_folder] || colName;
+          }
         }
+      } catch (e) {
+        console.warn('[Pose] Failed to resolve SKU body_type, using default poses column:', e.message);
       }
     }
 
-    // 3. Extract and parse URLs array
-    const rawVal = model[colName];
+    // 2. Fetch the correct pose column from the model record
+    const result = await pool.query(`SELECT "${colName}" FROM yizi_model WHERE uuid = $1`, [model_uuid]);
+    if (result.rows.length === 0) return res.json({ msg: 'ok', result: [] });
+
+    // 3. Parse TEXT column containing JSON array string
     let list = [];
-    if (rawVal) {
-      if (typeof rawVal === 'string') {
-        const trimmed = rawVal.trim();
-        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-          try {
-            list = JSON.parse(trimmed);
-          } catch (e) {
+    const raw = result.rows[0][colName];
+    if (raw) {
+      if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed.startsWith('[')) {
+          try { list = JSON.parse(trimmed); } catch (e) {
             list = trimmed.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
           }
         } else {
           list = trimmed.split(',').map(s => s.trim()).filter(Boolean);
         }
-      } else if (Array.isArray(rawVal)) {
-        list = rawVal;
+      } else if (Array.isArray(raw)) {
+        list = raw;
       }
     }
 
-    res.json({ msg: 'ok', result: list });
-  } catch (error) {
-    res.json({ msg: 'err', info: error.message });
+    res.json({ msg: 'ok', result: list.filter(Boolean) });
+  } catch (err) {
+    console.error('[Pose API Error]', err);
+    res.json({ msg: 'err', info: err.message });
   }
 });
 

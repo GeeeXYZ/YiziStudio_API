@@ -259,8 +259,15 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
       && orderContext.order_id !== 'unknown'
       && !orderContext.order_id.startsWith('test_order_');
     if (isWritebackEligible) {
-       const orderInputNode = Object.values(context).find(c => c.random_pose_image);
-       if (finalOssImages.length > 0 || allFailedUploads.length > 0 || (orderInputNode && orderInputNode.random_pose_image)) {
+       // Find the resolved pose URL from pipeline context (set by order_input node)
+       let resolvedPoseUrl = '';
+       for (const nodeOutputs of Object.values(context)) {
+         if (nodeOutputs && typeof nodeOutputs.random_pose_image === 'string' && nodeOutputs.random_pose_image) {
+           resolvedPoseUrl = nodeOutputs.random_pose_image;
+           break;
+         }
+       }
+       if (finalOssImages.length > 0 || allFailedUploads.length > 0 || resolvedPoseUrl) {
          try {
            const pgClient = await pool.connect();
            try {
@@ -268,12 +275,7 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
              const selectRes = await pgClient.query('SELECT data, wait_delivery FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [orderContext.order_id]);
              
              if (selectRes.rows.length > 0) {
-               let orderData = {};
-               if (typeof selectRes.rows[0].data === 'string') {
-                 try { orderData = JSON.parse(selectRes.rows[0].data); } catch(e) { orderData = {}; }
-               } else {
-                 orderData = selectRes.rows[0].data || {};
-               }
+               const orderData = selectRes.rows[0].data || {};
                const currentWaitDelivery = selectRes.rows[0].wait_delivery;
                let nextWaitDelivery = currentWaitDelivery;
 
@@ -281,8 +283,8 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
                const setIndex = orderContext.set_index || 0;
                if (!orderData.sets[setIndex]) orderData.sets[setIndex] = {};
                
-               if (orderInputNode && orderInputNode.random_pose_image) {
-                 orderData.sets[setIndex].usedPoseUrl = orderInputNode.random_pose_image;
+               if (resolvedPoseUrl) {
+                 orderData.sets[setIndex].usedPoseUrl = resolvedPoseUrl;
                }
 
                if (allFailedUploads.length > 0) {
