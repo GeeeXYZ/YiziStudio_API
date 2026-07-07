@@ -777,6 +777,65 @@ router.post('/client/sku/prompts', authenticateToken, async (req, res) => {
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
+// Get model poses filtered by plan body type
+router.post('/client/model/:uuid/poses', authenticateToken, async (req, res) => {
+  const { uuid } = req.params;
+  const { planId } = req.body;
+
+  try {
+    // 1. Fetch model poses columns
+    const modelRes = await pool.query('SELECT poses, half_poses, spacial_poses FROM "yizi_model" WHERE uuid = $1', [uuid]);
+    if (modelRes.rows.length === 0) {
+      return res.json({ msg: 'err', info: 'Model not found' });
+    }
+    const model = modelRes.rows[0];
+
+    // 2. Resolve which pose column to use based on SKU template's body_type/pose_folder
+    let colName = 'poses'; // default to full body
+    if (planId) {
+      const skuPk = await getPrimaryKeyColumn('yizi_sku');
+      const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [planId]);
+      if (skuRes.rows.length > 0) {
+        let skuData = {};
+        try {
+          skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+        } catch (e) {}
+
+        const bodyType = skuData.body_type || '';
+        const poseFolder = skuData.pose_folder || '';
+
+        if (bodyType === '半身' || poseFolder === 'half_poses') {
+          colName = 'half_poses';
+        } else if (bodyType === '特殊' || poseFolder === 'special_poses') {
+          colName = 'spacial_poses';
+        }
+      }
+    }
+
+    // 3. Extract and parse URLs array
+    const rawVal = model[colName];
+    let list = [];
+    if (rawVal) {
+      if (typeof rawVal === 'string') {
+        const trimmed = rawVal.trim();
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+          try {
+            list = JSON.parse(trimmed);
+          } catch (e) {
+            list = trimmed.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+          }
+        } else {
+          list = trimmed.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      } else if (Array.isArray(rawVal)) {
+        list = rawVal;
+      }
+    }
+
+    res.json({ msg: 'ok', result: list });
+  } catch (error) {
+    res.json({ msg: 'err', info: error.message });
+  }
 });
 
 export default router;

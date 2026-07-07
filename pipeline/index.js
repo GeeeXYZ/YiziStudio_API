@@ -268,7 +268,12 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
              const selectRes = await pgClient.query('SELECT data, wait_delivery FROM "yizi_orders" WHERE id = $1 FOR UPDATE', [orderContext.order_id]);
              
              if (selectRes.rows.length > 0) {
-               const orderData = selectRes.rows[0].data || {};
+               let orderData = {};
+               if (typeof selectRes.rows[0].data === 'string') {
+                 try { orderData = JSON.parse(selectRes.rows[0].data); } catch(e) { orderData = {}; }
+               } else {
+                 orderData = selectRes.rows[0].data || {};
+               }
                const currentWaitDelivery = selectRes.rows[0].wait_delivery;
                let nextWaitDelivery = currentWaitDelivery;
 

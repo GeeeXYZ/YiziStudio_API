@@ -104,7 +104,7 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
           if (skuRes.rows.length > 0) {
             const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
             
-            mock_order.sku_pose_folder = mock_order.sku_pose_folder || skuData.poseFolder || 'poses';
+            mock_order.sku_pose_folder = mock_order.sku_pose_folder || skuData.pose_folder || skuData.poseFolder || 'poses';
             
             if (skuData.workflow) {
               const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
