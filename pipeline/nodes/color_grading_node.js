@@ -65,20 +65,25 @@ export async function executeColorGrading(node, inputs) {
     imgInstance = imgInstance.sharpen({ sigma: sharpen });
   }
 
-  // E. Noise (SVG Overlay)
+  // E. Noise (Raw Buffer Overlay)
   if (noise > 0) {
-    // Limit max noise opacity so it doesn't completely destroy the image
-    const noiseOpacity = (noise / 100) * 0.35; 
-    const svgNoise = Buffer.from(`
-      <svg width="${metadata.width}" height="${metadata.height}" xmlns="http://www.w3.org/2000/svg">
-        <filter id="noise">
-          <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" result="noise" />
-          <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${noiseOpacity} 0" />
-        </filter>
-        <rect width="100%" height="100%" filter="url(#noise)" fill="white" />
-      </svg>
-    `);
-    imgInstance = imgInstance.composite([{ input: svgNoise, blend: 'overlay' }]);
+    const noiseSize = 256;
+    const noiseBuffer = Buffer.alloc(noiseSize * noiseSize * 3);
+    const amplitude = (noise / 100) * 127;
+    
+    for (let i = 0; i < noiseBuffer.length; i += 3) {
+      const val = Math.floor(128 + (Math.random() * 2 - 1) * amplitude);
+      noiseBuffer[i] = val;
+      noiseBuffer[i+1] = val;
+      noiseBuffer[i+2] = val;
+    }
+
+    imgInstance = imgInstance.composite([{ 
+      input: noiseBuffer, 
+      raw: { width: noiseSize, height: noiseSize, channels: 3 },
+      tile: true,
+      blend: 'overlay' 
+    }]);
   }
 
   // 4. Output processed image as Base64
