@@ -70,12 +70,12 @@ export async function executeColorGrading(node, inputs) {
     // Limit max noise opacity so it doesn't completely destroy the image
     const noiseOpacity = (noise / 100) * 0.35; 
     const svgNoise = Buffer.from(`
-      <svg width="${metadata.width}" height="${metadata.height}">
+      <svg width="${metadata.width}" height="${metadata.height}" xmlns="http://www.w3.org/2000/svg">
         <filter id="noise">
           <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" result="noise" />
           <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${noiseOpacity} 0" />
         </filter>
-        <rect width="100%" height="100%" filter="url(#noise)" fill="none" />
+        <rect width="100%" height="100%" filter="url(#noise)" fill="white" />
       </svg>
     `);
     imgInstance = imgInstance.composite([{ input: svgNoise, blend: 'overlay' }]);
