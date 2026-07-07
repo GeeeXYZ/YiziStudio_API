@@ -27,15 +27,15 @@ function getActualTableName(db_name) {
 function unpackRow(row) {
   if (!row) return row;
   if (row.data) {
-    let parsedData = row.data;
-    let attempts = 0;
-    while (typeof parsedData === 'string' && attempts < 3) {
-      try { parsedData = JSON.parse(parsedData); } catch (e) { break; }
-      attempts++;
-    }
-    if (parsedData && typeof parsedData === 'object') {
-      Object.assign(row, parsedData);
-      row.data = parsedData; // Retain the nested object
+    if (typeof row.data === 'string') {
+      try {
+        const parsed = JSON.parse(row.data);
+        Object.assign(row, parsed);
+        row.data = parsed; // Retain the nested object
+      } catch (e) {}
+    } else if (typeof row.data === 'object') {
+      Object.assign(row, row.data);
+      // Retain the nested object
     }
     // We intentionally DO NOT delete row.data here anymore so frontend can use item.data.*
   }
@@ -52,16 +52,10 @@ function prepareQueryValue(val) {
 
 // Helper to format order row to support legacy client count and format fields
 function formatOrderRow(row) {
-  let parsedData = row.data;
-  let attempts = 0;
-  // Handle double-stringified JSON gracefully
-  while (typeof parsedData === 'string' && attempts < 3) {
-    try { parsedData = JSON.parse(parsedData); } catch (e) { break; }
-    attempts++;
-  }
-  if (!parsedData || typeof parsedData !== 'object') {
-    parsedData = {};
-  }
+  let parsedData = {};
+  try {
+    parsedData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+  } catch (e) {}
 
   let groupCount = 0;
   let deliveryCount = 0;
