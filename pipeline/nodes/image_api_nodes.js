@@ -79,7 +79,7 @@ export async function executeSeedream(node, inputs, env, pool) {
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(300000)
-  });
+  }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
     const errText = await res.text();
@@ -149,7 +149,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(180000)
-  });
+  }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
     const errText = await res.text();
@@ -268,7 +268,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     headers: headers,
     body: reqBody,
     signal: AbortSignal.timeout(360000)
-  });
+  }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
     const errText = await res.text();

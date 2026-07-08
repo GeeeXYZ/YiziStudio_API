@@ -11,6 +11,84 @@ import { uploadToOSS } from './core/oss_helper.js';
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
 export { uploadToOSS };
 
+// ============================================================
+// GLOBAL PIPELINE CONCURRENCY QUEUE + PER-ORDER DEDUPLICATION
+// ============================================================
+const MAX_CONCURRENT_PIPELINES = 10;
+let activePipelines = 0;
+const pendingQueue = [];
+const inflightPipelines = new Map(); // key: "orderId_setIndex" → Promise
+
+function drainQueue() {
+  while (pendingQueue.length > 0 && activePipelines < MAX_CONCURRENT_PIPELINES) {
+    const next = pendingQueue.shift();
+    next();
+  }
+}
+
+/**
+ * Public entry point — wraps _runPipelineInternal with:
+ * 1. Per-order deduplication (same order+set won't run twice concurrently)
+ * 2. Global concurrency queue (max N pipelines running at once)
+ */
+export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
+  // --- Deduplication ---
+  const orderId = orderContext?.order_id || '';
+  const setIndex = orderContext?.set_index ?? 0;
+  const dedupeKey = `${orderId}_${setIndex}`;
+  
+  if (orderId && orderId !== 'toolkit_run' && orderId !== 'unknown' && !orderId.startsWith('test_order_')) {
+    if (inflightPipelines.has(dedupeKey)) {
+      console.log(`[Pipeline Queue] ⚡ Skipping duplicate pipeline for ${dedupeKey} — already running.`);
+      return inflightPipelines.get(dedupeKey);
+    }
+  }
+
+  // --- Queued Execution ---
+  const executionPromise = new Promise((resolve, reject) => {
+    const execute = async () => {
+      activePipelines++;
+      const queueSize = pendingQueue.length;
+      console.log(`[Pipeline Queue] ▶ Starting pipeline [${activePipelines}/${MAX_CONCURRENT_PIPELINES} active, ${queueSize} queued] for ${dedupeKey}`);
+      try {
+        const result = await _runPipelineInternal(workflowJson, orderContext, pool, options);
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      } finally {
+        activePipelines--;
+        inflightPipelines.delete(dedupeKey);
+        console.log(`[Pipeline Queue] ◼ Pipeline finished for ${dedupeKey} [${activePipelines}/${MAX_CONCURRENT_PIPELINES} active, ${pendingQueue.length} queued]`);
+        drainQueue();
+      }
+    };
+
+    if (activePipelines < MAX_CONCURRENT_PIPELINES) {
+      execute();
+    } else {
+      console.log(`[Pipeline Queue] ⏳ Queuing pipeline for ${dedupeKey} [${activePipelines}/${MAX_CONCURRENT_PIPELINES} active, ${pendingQueue.length + 1} in queue]`);
+      pendingQueue.push(execute);
+    }
+  });
+
+  // Register for dedup tracking
+  if (orderId && orderId !== 'toolkit_run' && orderId !== 'unknown' && !orderId.startsWith('test_order_')) {
+    inflightPipelines.set(dedupeKey, executionPromise);
+  }
+
+  return executionPromise;
+}
+
+// Export queue status for monitoring
+export function getPipelineQueueStatus() {
+  return {
+    active: activePipelines,
+    max: MAX_CONCURRENT_PIPELINES,
+    queued: pendingQueue.length,
+    inflight: [...inflightPipelines.keys()]
+  };
+}
+
 export async function runSingleNode(node, inputs, env, pool, orderContext, executionState = null) {
   switch (node.type) {
     case 'toolkit_input': return await executeToolkitInput(node, inputs, orderContext, env, pool);
@@ -42,7 +120,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
   }
 }
 
-export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
+async function _runPipelineInternal(workflowJson, orderContext, pool, options = {}) {
   const { simulate = false } = options;
   const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const traceLogs = [];

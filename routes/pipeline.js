@@ -4,9 +4,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool, getPrimaryKeyColumn, getTableColumns } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { runPipeline } from '../pipeline/index.js';
+import { runPipeline, getPipelineQueueStatus } from '../pipeline/index.js';
 
 const router = express.Router();
+
+// Pipeline Queue Status Monitor
+router.get('/api_pipeline/queue_status', authenticateToken, (req, res) => {
+  res.json({ msg: 'ok', result: getPipelineQueueStatus() });
+});
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
