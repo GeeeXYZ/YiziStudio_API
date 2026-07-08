@@ -812,36 +812,40 @@ router.post('/client/model/poses', authenticateToken, async (req, res) => {
     const { model_uuid, planId } = req.body;
     if (!model_uuid) return res.json({ msg: 'ok', result: [] });
 
-    // 1. Resolve body_type from SKU plan → correct pose column
-    let colName = 'poses'; // default: fullbody
+    // 1. Resolve body_type from yizi_sku.data → correct pose key inside model.data
+    let poseKey = 'poses'; // default: fullbody
     if (planId) {
       try {
-        const skuRes = await pool.query('SELECT data FROM yizi_front_sku_settings WHERE id = $1', ['1']);
-        const plans = skuRes.rows[0]?.data?.plans || [];
-        const plan = plans.find(p => p.id === planId);
-        if (plan) {
-          if (plan.body_type === '半身') colName = 'half_poses';
-          else if (plan.body_type === '特殊') colName = 'spacial_poses';
+        const skuPk = await getPrimaryKeyColumn('yizi_sku');
+        const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [planId]);
+        if (skuRes.rows.length > 0) {
+          const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+          if (skuData.body_type === '半身') poseKey = 'half_poses';
+          else if (skuData.body_type === '特殊') poseKey = 'special_poses';
           // Allow explicit pose_folder override from SKU config
-          if (plan.pose_folder) {
-            const folderToCol = { 'poses': 'poses', 'half_poses': 'half_poses', 'special_poses': 'spacial_poses' };
-            colName = folderToCol[plan.pose_folder] || colName;
+          if (skuData.pose_folder) {
+            const folderToKey = { 'poses': 'poses', 'half_poses': 'half_poses', 'special_poses': 'special_poses' };
+            poseKey = folderToKey[skuData.pose_folder] || poseKey;
           }
         }
       } catch (e) {
-        console.warn('[Pose] Failed to resolve SKU body_type, using default poses column:', e.message);
+        console.warn('[Pose] Failed to resolve SKU body_type, using default poses key:', e.message);
       }
     }
 
-    // 2. Fetch the correct pose column from the model record
-    const result = await pool.query(`SELECT "${colName}" FROM yizi_model WHERE uuid = $1`, [model_uuid]);
+    // 2. Fetch model data JSON and extract the correct pose array
+    const result = await pool.query('SELECT data FROM yizi_model WHERE uuid = $1', [model_uuid]);
     if (result.rows.length === 0) return res.json({ msg: 'ok', result: [] });
 
-    // 3. Parse TEXT column containing JSON array string
+    const modelData = typeof result.rows[0].data === 'string' ? JSON.parse(result.rows[0].data) : (result.rows[0].data || {});
+
+    // 3. Extract pose list from the correct key
     let list = [];
-    const raw = result.rows[0][colName];
+    const raw = modelData[poseKey];
     if (raw) {
-      if (typeof raw === 'string') {
+      if (Array.isArray(raw)) {
+        list = raw;
+      } else if (typeof raw === 'string') {
         const trimmed = raw.trim();
         if (trimmed.startsWith('[')) {
           try { list = JSON.parse(trimmed); } catch (e) {
@@ -850,8 +854,6 @@ router.post('/client/model/poses', authenticateToken, async (req, res) => {
         } else {
           list = trimmed.split(',').map(s => s.trim()).filter(Boolean);
         }
-      } else if (Array.isArray(raw)) {
-        list = raw;
       }
     }
 
