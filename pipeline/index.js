@@ -294,8 +294,9 @@ export async function runPipeline(workflowJson, orderContext, pool, options = {}
                }
 
                if (finalOssImages.length > 0) {
-                   // Only push to delivery pool and flip wait_delivery if auto_delivery is enabled
-                   if (orderContext.auto_delivery) {
+                    // Only push to delivery pool and flip wait_delivery if auto_delivery is enabled
+                    console.log(`[Pipeline] AUTO_DELIVERY CHECK: orderContext.auto_delivery = ${JSON.stringify(orderContext.auto_delivery)} (type: ${typeof orderContext.auto_delivery}) | order_id=${orderContext.order_id}`);
+                    if (orderContext.auto_delivery) {
                      if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
                      for (const imgUrl of finalOssImages) {
                        orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
