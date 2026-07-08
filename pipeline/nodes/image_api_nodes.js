@@ -214,7 +214,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const modelId = node.data.modelId || 'gpt-image-2-vip';
-  const size = node.data.imageResolution || '1024x1024';
+  const size = node.data.imageResolution || 'auto';
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
@@ -233,8 +233,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     const fd = new FormData();
     fd.append('model', modelId);
     fd.append('prompt', prompt);
-    if (size) fd.append('size', size);
-    fd.append('n', "1");
+    if (size && size !== 'auto') fd.append('size', size);
 
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
@@ -255,8 +254,8 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     reqBody = fd;
   } else {
     endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
-    const payload = { model: modelId, prompt: prompt, n: 1 };
-    if (size) payload.size = size;
+    const payload = { model: modelId, prompt: prompt };
+    if (size && size !== 'auto') payload.size = size;
     reqBody = JSON.stringify(payload);
     headers['Content-Type'] = 'application/json';
   }
@@ -276,7 +275,11 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
   const data = await res.json();
   const imageUrls = data.data?.map(img => {
     if (img.url) return img.url;
-    if (img.b64_json) return `data:image/png;base64,${img.b64_json}`;
+    if (img.b64_json) {
+      // APIYi b64_json already includes 'data:image/png;base64,' prefix
+      if (img.b64_json.startsWith('data:')) return img.b64_json;
+      return `data:image/png;base64,${img.b64_json}`;
+    }
     return null;
   }).filter(Boolean) || [];
 
