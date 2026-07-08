@@ -618,11 +618,17 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
     // We removed the self-notification:
     // orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { orderId: id, event: 'COMMENT_ADDED' });
 
-    // Trigger Feishu Notification
+    // Trigger Feishu Notification (with user remark like order creation)
+    let commentDisplayName = req.user.phone || '';
+    try {
+      const commentUserRes = await pool.query('SELECT remark FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [req.user.unionid, req.user.unionid]);
+      const commentRemark = commentUserRes.rows[0]?.remark || '';
+      if (commentRemark) commentDisplayName = `${commentRemark} (${commentDisplayName})`;
+    } catch(e) {}
     orderEventEmitter.emit('NOTIFY_NEW_COMMENT', {
       orderId: id,
       openid: req.user.unionid,
-      phone: req.user.phone || '',
+      phone: commentDisplayName,
       comment
     });
 
@@ -705,10 +711,17 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
 
     // Trigger Feishu Notification only when the entire order is fully confirmed for the first time
     if (completed === '1' && !wasCompleted) {
+      // Fetch user remark for display name (like order creation notification)
+      let confirmDisplayName = req.user.phone || '';
+      try {
+        const confirmUserRes = await pool.query('SELECT remark FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [req.user.unionid, req.user.unionid]);
+        const confirmRemark = confirmUserRes.rows[0]?.remark || '';
+        if (confirmRemark) confirmDisplayName = `${confirmRemark} (${confirmDisplayName})`;
+      } catch(e) {}
       orderEventEmitter.emit('NOTIFY_ORDER_CONFIRMED', {
         orderId: id,
         openid: req.user.unionid,
-        phone: req.user.phone || ''
+        phone: confirmDisplayName
       });
     }
 
