@@ -15,7 +15,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Initialize database connection (runs DDL on import)
-import './config/db.js';
+import { pool } from './config/db.js';
+import { startQueueWorker } from './pipeline/worker.js';
 
 // Re-export orderEventEmitter for backward compatibility
 export { orderEventEmitter } from './events.js';
@@ -65,6 +66,9 @@ app.use(comfyuiRoutes);
 app.use(toolkitRoutes);
 app.use(pipelineRoutes);
 app.use(rpcRoutes);  // Generic RPC — must be last (catch-all dynamic routes)
+
+// Start Background Worker for Persistent Pipeline Queue
+startQueueWorker(pool);
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {

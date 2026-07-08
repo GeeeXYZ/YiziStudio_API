@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import { orderEventEmitter } from '../events.js';
 import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
 import { executeToolkitInput, executeOrderInput } from './nodes/input_nodes.js';
 import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary } from './nodes/llm_nodes.js';
@@ -14,46 +16,34 @@ export { uploadToOSS };
 // ============================================================
 // PIPELINE PER-ORDER DEDUPLICATION
 // ============================================================
-const inflightPipelines = new Map(); // key: "orderId_setIndex" → Promise
-
-/**
- * Public entry point — wraps _runPipelineInternal with:
- * 1. Per-order deduplication (same order+set won't run twice concurrently)
- */
 export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
-  // --- Deduplication ---
-  const orderId = orderContext?.order_id || '';
+  // --- Asynchronous Queue Insertion ---
+  const orderId = orderContext?.order_id || 'unknown';
   const setIndex = orderContext?.set_index ?? 0;
-  const dedupeKey = `${orderId}_${setIndex}`;
   
-  if (orderId && orderId !== 'toolkit_run' && orderId !== 'unknown' && !orderId.startsWith('test_order_')) {
-    if (inflightPipelines.has(dedupeKey)) {
-      console.log(`[Pipeline Queue] ⚡ Skipping duplicate pipeline for ${dedupeKey} — already running.`);
-      return inflightPipelines.get(dedupeKey);
-    }
+  if (options.simulate) {
+    // If simulate mode, we must run it immediately
+    return _runPipelineInternal(workflowJson, orderContext, pool, options);
   }
 
-  console.log(`[Pipeline] ▶ Starting pipeline execution for ${dedupeKey}`);
+  const taskId = crypto.randomUUID();
+  console.log(`[Pipeline Queue] ▶ Queuing pipeline task ${taskId} for ${orderId}_${setIndex}`);
   
-  const executionPromise = _runPipelineInternal(workflowJson, orderContext, pool, options)
-    .finally(() => {
-      inflightPipelines.delete(dedupeKey);
-      console.log(`[Pipeline] ◼ Pipeline finished for ${dedupeKey}`);
-    });
-
-  // Register for dedup tracking
-  if (orderId && orderId !== 'toolkit_run' && orderId !== 'unknown' && !orderId.startsWith('test_order_')) {
-    inflightPipelines.set(dedupeKey, executionPromise);
+  try {
+    await pool.query(
+      `INSERT INTO yizi_pipeline_queue (id, workflow_json, order_context, status) VALUES ($1, $2, $3, 'pending')`,
+      [taskId, typeof workflowJson === 'string' ? workflowJson : JSON.stringify(workflowJson), JSON.stringify(orderContext)]
+    );
+    return { success: true, queued: true, taskId, message: 'Task queued successfully' };
+  } catch (err) {
+    console.error(`[Pipeline Queue] Failed to queue task ${taskId}:`, err.message);
+    throw err;
   }
-
-  return executionPromise;
 }
 
-// Export queue status for monitoring
+// Export queue status for monitoring (deprecated/stubbed for backwards compatibility)
 export function getPipelineQueueStatus() {
-  return {
-    inflight: [...inflightPipelines.keys()]
-  };
+  return { inflight: [] };
 }
 
 export async function runSingleNode(node, inputs, env, pool, orderContext, executionState = null) {
@@ -87,7 +77,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
   }
 }
 
-async function _runPipelineInternal(workflowJson, orderContext, pool, options = {}) {
+export async function _runPipelineInternal(workflowJson, orderContext, pool, options = {}) {
   const { simulate = false } = options;
   const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const traceLogs = [];
@@ -348,9 +338,9 @@ async function _runPipelineInternal(workflowJson, orderContext, pool, options = 
                      }
                      console.log(`[Pipeline] Auto-delivery ON: Writing ${finalOssImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
                      nextWaitDelivery = '0';
-                     if (orderContext.eventEmitter) {
+                     if (orderEventEmitter) {
                        try {
-                         orderContext.eventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length });
+                         orderEventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length });
                        } catch (sseErr) {}
                      }
                    } else {
