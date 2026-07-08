@@ -260,6 +260,9 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     headers['Content-Type'] = 'application/json';
   }
 
+  console.log(`[ApiYi] Request: endpoint=${endpointUrl} | model=${modelId} | size=${size} | images=${combined_images.length} | hasRefImages=${hasReferenceImages}`);
+  console.log(`[ApiYi] size from node.data.imageResolution = "${node.data.imageResolution}"`);
+
   const res = await fetchWithRetry(endpointUrl, {
     method: 'POST',
     headers: headers,
