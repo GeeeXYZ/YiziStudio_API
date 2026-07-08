@@ -275,7 +275,9 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
     let skuData = {};
     try {
       skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
-    } catch (e) {}
+    } catch (e) {
+      console.error('[API Workflow] Failed to parse order data JSON:', e.message);
+    }
 
     const realServerPrice = parseFloat(skuData.price) || 0;
 
@@ -576,7 +578,9 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
     let orderData = {};
     try {
       orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
-    } catch(e) {}
+    } catch(e) {
+      console.error('[Order List] Failed to parse order data JSON:', e.message);
+    }
     
     const deliveryImg = orderData.sets?.[index]?.delivery_imgs?.[delivery_index];
     const deliveryUuid = deliveryImg?.id || `img_${index}_${delivery_index}`;
@@ -624,7 +628,9 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
       const commentUserRes = await pool.query('SELECT remark FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [req.user.unionid, req.user.unionid]);
       const commentRemark = commentUserRes.rows[0]?.remark || '';
       if (commentRemark) commentDisplayName = `${commentRemark} (${commentDisplayName})`;
-    } catch(e) {}
+    } catch(e) {
+      console.error('[Order Detail] Failed to get user remark:', e.message);
+    }
     orderEventEmitter.emit('NOTIFY_NEW_COMMENT', {
       orderId: id,
       openid: req.user.unionid,
@@ -650,7 +656,9 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
     let orderData = {};
     try {
       orderData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
-    } catch(e) {}
+    } catch(e) {
+      console.error('[Order Detail] Failed to parse order data JSON:', e.message);
+    }
     
     // 2) Update confirmed_at timestamp inside sets.delivery_imgs
     let totalDeliveryImages = 0;
@@ -685,13 +693,18 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
       const orderOpenidRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [id]);
       const openid = orderOpenidRes.rows[0]?.openid || req.user.openid;
       
+      const values = [];
+      const flatParams = [];
+      let paramIndex = 1;
+      
       for (const imgUrl of confirmedImagesToInsert) {
         const galleryId = 'gal_' + crypto.randomBytes(8).toString('hex');
-        await pool.query(
-            `INSERT INTO "yizi_gallery" (id, openid, oss_url, order_id) VALUES ($1, $2, $3, $4)`,
-            [galleryId, openid, imgUrl, id]
-        );
+        values.push(`($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`);
+        flatParams.push(galleryId, openid, imgUrl, id);
       }
+      
+      const query = `INSERT INTO "yizi_gallery" (id, openid, oss_url, order_id) VALUES ${values.join(', ')}`;
+      await pool.query(query, flatParams);
     }
 
     // 3) Save updated data and check if completed
@@ -717,7 +730,9 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
         const confirmUserRes = await pool.query('SELECT remark FROM "yizi_users" WHERE "user_id" = $1 OR "phone_number" = $2', [req.user.unionid, req.user.unionid]);
         const confirmRemark = confirmUserRes.rows[0]?.remark || '';
         if (confirmRemark) confirmDisplayName = `${confirmRemark} (${confirmDisplayName})`;
-      } catch(e) {}
+      } catch(e) {
+        console.error('[Order Confirm] Failed to confirm user remark:', e.message);
+      }
       orderEventEmitter.emit('NOTIFY_ORDER_CONFIRMED', {
         orderId: id,
         openid: req.user.unionid,
@@ -754,7 +769,9 @@ router.post('/client/gallery/list', authenticateToken, async (req, res) => {
     const list = result.rows.map(row => {
         let orderData = {};
         if (typeof row.order_data === 'string') {
-            try { orderData = JSON.parse(row.order_data); } catch(e){}
+            try { orderData = JSON.parse(row.order_data); } catch(e){
+              console.error('[Gallery List] Failed to parse order data JSON:', e.message);
+            }
         } else {
             orderData = row.order_data || {};
         }
