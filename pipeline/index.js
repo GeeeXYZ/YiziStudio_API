@@ -336,6 +336,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                      for (const imgUrl of finalOssImages) {
                        orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
                      }
+                     orderData.sets[setIndex].is_auto_delivered = true;
                      console.log(`[Pipeline] Auto-delivery ON: Writing ${finalOssImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
                      nextWaitDelivery = '0';
                      if (orderEventEmitter) {
