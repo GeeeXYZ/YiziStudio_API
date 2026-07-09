@@ -476,25 +476,67 @@ router.get('/client/order/events', authenticateToken, (req, res) => {
 // 6. List user orders (formatting datetime and data fields)
 router.post('/client/order/list', authenticateToken, async (req, res) => {
   const unionid = req.user.unionid;
-  try {
-    // Pre-fetch SKU and model name maps for enriching orders missing planTitle/model_name
-    const skuPk = await getPrimaryKeyColumn('yizi_sku');
-    const [skuRows, modelRows] = await Promise.all([
-      pool.query(`SELECT "${skuPk}", title FROM "yizi_sku"`),
-      pool.query('SELECT uuid, title FROM "yizi_model"')
-    ]);
-    const skuMap = {};
-    skuRows.rows.forEach(s => skuMap[s[skuPk]] = s.title);
-    const modelMap = {};
-    modelRows.rows.forEach(m => modelMap[m.uuid] = m.title);
+  const page = Math.max(1, parseInt(req.body.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(req.body.pageSize) || 20)); // Limit page size to max 100
+  const offset = (page - 1) * pageSize;
 
-    const result = await pool.query(
-      'SELECT * FROM "yizi_orders" WHERE openid = $1 OR phone = $2 ORDER BY datetime DESC',
+  try {
+    // 1. Get total count
+    const countRes = await pool.query(
+      'SELECT count(*) FROM "yizi_orders" WHERE openid = $1 OR phone = $2',
       [unionid, req.user.phone || '']
     );
+    const totalCount = parseInt(countRes.rows[0].count, 10);
+
+    // 2. Fetch paginated orders
+    const result = await pool.query(
+      'SELECT * FROM "yizi_orders" WHERE openid = $1 OR phone = $2 ORDER BY datetime DESC LIMIT $3 OFFSET $4',
+      [unionid, req.user.phone || '', pageSize, offset]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ msg: 'ok', result: { list: [], total: totalCount, page, pageSize } });
+    }
+
+    // 3. Extract unique planIds and model_uuids needed for this page
+    const planIds = new Set();
+    const modelUuids = new Set();
+    
+    result.rows.forEach(row => {
+      const data = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+      if (data.planId && !data.planTitle) planIds.add(data.planId);
+      if (data.model_uuid && !data.model_name) modelUuids.add(data.model_uuid);
+    });
+
+    const skuPk = await getPrimaryKeyColumn('yizi_sku');
+    const skuMap = {};
+    const modelMap = {};
+
+    // 4. Query only the needed SKUs and Models
+    const promises = [];
+    if (planIds.size > 0) {
+      const planIdsArr = Array.from(planIds);
+      const placeholders = planIdsArr.map((_, i) => `$${i + 1}`).join(',');
+      promises.push(
+        pool.query(`SELECT "${skuPk}", title FROM "yizi_sku" WHERE "${skuPk}" IN (${placeholders})`, planIdsArr)
+          .then(res => { res.rows.forEach(s => skuMap[s[skuPk]] = s.title); })
+      );
+    }
+    
+    if (modelUuids.size > 0) {
+      const uuidsArr = Array.from(modelUuids);
+      const placeholders = uuidsArr.map((_, i) => `$${i + 1}`).join(',');
+      promises.push(
+        pool.query(`SELECT uuid, title FROM "yizi_model" WHERE uuid IN (${placeholders})`, uuidsArr)
+          .then(res => { res.rows.forEach(m => modelMap[m.uuid] = m.title); })
+      );
+    }
+
+    if (promises.length > 0) await Promise.all(promises);
+
+    // 5. Format and enrich orders
     const list = result.rows.map(row => {
       const formatted = formatOrderRow(row);
-      // Inject resolved names if the order's data doesn't already have them
       if (formatted.data && !formatted.data.planTitle && formatted.data.planId && skuMap[formatted.data.planId]) {
         formatted.data.planTitle = skuMap[formatted.data.planId];
       }
@@ -503,7 +545,10 @@ router.post('/client/order/list', authenticateToken, async (req, res) => {
       }
       return formatted;
     });
-    res.json({ msg: 'ok', result: list });
+
+    // Note: returning { list, total, page, pageSize } but legacy clients expect an array.
+    // If frontend crashes, frontend must be updated to handle result.list instead of result array.
+    res.json({ msg: 'ok', result: { list, total: totalCount, page, pageSize } });
   } catch (error) {
     res.json({ msg: 'err', info: error.message });
   }
