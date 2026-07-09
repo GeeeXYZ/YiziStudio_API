@@ -111,6 +111,13 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
             
             mock_order.sku_pose_folder = mock_order.sku_pose_folder || skuData.pose_folder || skuData.poseFolder || 'poses';
             
+            // CRITICAL FIX: Inherit auto_delivery from SKU template if not explicitly overridden by the frontend.
+            // This ensures the SKU's auto_delivery setting is respected even for manual triggers.
+            if (mock_order.auto_delivery === undefined || mock_order.auto_delivery === null) {
+              mock_order.auto_delivery = skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1';
+              console.log(`[Pipeline Trigger] Inheriting auto_delivery from SKU: ${mock_order.auto_delivery}`);
+            }
+            
             if (skuData.workflow) {
               const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
               const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
