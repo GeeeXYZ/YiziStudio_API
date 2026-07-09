@@ -69,7 +69,8 @@ function formatOrderRow(row) {
         s.delivery_imgs = [];
       } else if (Array.isArray(s.delivery_imgs) && s.delivery_imgs.length > 0) {
         deliveryCount++;
-        if (s.delivery_imgs.some(d => d.confirmed_at)) {
+        const imgsWithContent = s.delivery_imgs.filter(d => d.img);
+        if (imgsWithContent.length > 0 && imgsWithContent.every(d => d.confirmed_at)) {
           confirmGroupCount++;
         }
       }
