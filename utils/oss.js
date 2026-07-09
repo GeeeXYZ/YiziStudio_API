@@ -73,7 +73,7 @@ function extractOSSKeys(record) {
   const region = process.env.OSS_REGION;
   if (!bucketName || !region) return keys;
   
-  const ossDomain = `${bucketName}.${region}.aliyuncs.com/`;
+  const ossDomain = process.env.OSS_ENDPOINT ? `${bucketName}.${process.env.OSS_ENDPOINT.replace('https://', '').replace('http://', '')}/` : `${bucketName}.${region}.aliyuncs.com/`;
 
   function searchKeys(obj) {
     if (typeof obj === 'string') {

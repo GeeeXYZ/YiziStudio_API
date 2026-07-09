@@ -34,6 +34,11 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
     timeout: 300000
   };
 
+  // Allow overriding endpoint for Transfer Acceleration (e.g. oss-accelerate.aliyuncs.com)
+  if (env.OSS_ENDPOINT) {
+    ossConfig.endpoint = env.OSS_ENDPOINT;
+  }
+
   if (!ossConfig.accessKeyId) {
      throw new Error('OSS configuration missing in backend .env');
   }

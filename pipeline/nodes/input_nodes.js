@@ -34,14 +34,20 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
     outputs.random_pose_image = orderContext.selectedPoseUrl;
   } else if (outputs.model_uuid) {
     try {
-      const ossClient = new OSS({
+      const ossConfig = {
         region: env.OSS_REGION,
         accessKeyId: env.OSS_ACCESS_KEY_ID,
         accessKeySecret: env.OSS_ACCESS_KEY_SECRET,
         bucket: env.OSS_BUCKET,
         secure: true,
         timeout: 10000
-      });
+      };
+      
+      if (env.OSS_ENDPOINT) {
+        ossConfig.endpoint = env.OSS_ENDPOINT;
+      }
+      
+      const ossClient = new OSS(ossConfig);
       const poseFolder = orderContext.sku_pose_folder || 'poses';
       const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
       const listResult = await ossClient.list({ prefix, 'max-keys': 1000 });
