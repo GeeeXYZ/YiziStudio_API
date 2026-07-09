@@ -17,19 +17,26 @@ async function getConcurrencyLimit(pool) {
     return 2; // Default to 2
 }
 
+// In-flight task IDs — prevents the same task from being picked up twice
+// due to race conditions between NOTIFY, 60s poller, and post-completion re-trigger.
+const inflightTaskIds = new Set();
+
 async function processQueue(pool) {
+    // Mutex: only one invocation of the scheduling loop at a time.
+    // This flag guards the while-loop itself, NOT the long-running pipeline execution.
     if (isProcessing) return;
     isProcessing = true;
 
     try {
         const concurrencyLimit = await getConcurrencyLimit(pool);
 
+        // Keep trying to fill available worker slots
         while (activeWorkers < concurrencyLimit) {
             const pgClient = await pool.connect();
             let task = null;
             try {
                 await pgClient.query('BEGIN');
-                // Lock the next pending task
+                // Atomically lock and claim the next pending task
                 const res = await pgClient.query(`
                     UPDATE yizi_pipeline_queue 
                     SET status = 'processing', updated_at = NOW() 
@@ -41,7 +48,6 @@ async function processQueue(pool) {
                         LIMIT 1
                     ) RETURNING *;
                 `);
-                
                 if (res.rows.length > 0) {
                     task = res.rows[0];
                 }
@@ -55,13 +61,21 @@ async function processQueue(pool) {
             }
 
             if (!task) {
-                break; // No more pending tasks
+                break; // Queue empty — exit the while loop
             }
 
-            // We have a task, execute it in background
+            // Double-check: avoid running a task we already have in-flight (safety net)
+            if (inflightTaskIds.has(task.id)) {
+                console.warn(`[Queue Worker] Task ${task.id} already in-flight, skipping.`);
+                break;
+            }
+
+            // Reserve this slot BEFORE releasing isProcessing
             activeWorkers++;
+            inflightTaskIds.add(task.id);
             console.log(`[Queue Worker] 🚀 Started Task ${task.id}. Active Workers: ${activeWorkers}/${concurrencyLimit}`);
 
+            // Execute in background — this IIFE returns immediately
             (async () => {
                 let status = 'completed';
                 let errorMsg = null;
@@ -72,7 +86,6 @@ async function processQueue(pool) {
                     let orderContext = task.order_context;
                     try { orderContext = JSON.parse(orderContext); } catch (e) {}
 
-                    // Run the actual pipeline (this will take minutes)
                     const result = await _runPipelineInternal(workflowJson, orderContext, pool, {});
                     
                     if (result && !result.success) {
@@ -85,9 +98,10 @@ async function processQueue(pool) {
                     console.error(`[Queue Worker] ❌ Task ${task.id} Failed:`, errorMsg);
                 } finally {
                     activeWorkers--;
+                    inflightTaskIds.delete(task.id);
                     console.log(`[Queue Worker] 🏁 Task ${task.id} Finished (${status}). Active Workers: ${activeWorkers}/${concurrencyLimit}`);
                     
-                    // Update task status in DB
+                    // Persist final status
                     try {
                         await pool.query(
                             `UPDATE yizi_pipeline_queue SET status = $1, error_msg = $2, updated_at = NOW() WHERE id = $3`,
@@ -97,17 +111,22 @@ async function processQueue(pool) {
                         console.error(`[Queue Worker] Failed to update task ${task.id} status:`, dbErr.message);
                     }
                     
-                    // Trigger queue processing again just in case there are pending tasks
-                    processQueue(pool);
+                    // Re-trigger scheduler to pick up any remaining pending tasks.
+                    // Use setImmediate to yield first, ensuring isProcessing has been released
+                    // before we attempt to re-enter the scheduling loop.
+                    setImmediate(() => processQueue(pool));
                 }
             })();
         }
     } catch (err) {
         console.error('[Queue Worker] Error processing queue:', err);
     } finally {
+        // Release the scheduling lock. The long-running pipelines above
+        // are already running independently — this only guards the while-loop.
         isProcessing = false;
     }
 }
+
 
 export async function startQueueWorker(pool) {
     console.log('[Queue Worker] 🟢 Initializing PostgreSQL LISTEN/NOTIFY daemon...');
