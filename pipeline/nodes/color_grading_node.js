@@ -1,6 +1,6 @@
-import sharp from 'sharp';
-
 export async function executeColorGrading(node, inputs) {
+  const sharp = (await import('sharp')).default;
+
   // 1. Get input image (URL or Base64)
   let rawImage = inputs.image || node.data.image || inputs.input || '';
   if (Array.isArray(rawImage)) rawImage = rawImage.flat().filter(Boolean)[0];
