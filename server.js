@@ -16,9 +16,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Initialize database connection (runs DDL on import)
 import { pool } from './config/db.js';
-import { startQueueWorker } from './pipeline/worker.js';
-
-// Re-export orderEventEmitter for backward compatibility
+// Import route modules
 export { orderEventEmitter } from './events.js';
 
 // Import route modules
@@ -67,8 +65,7 @@ app.use(toolkitRoutes);
 app.use(pipelineRoutes);
 app.use(rpcRoutes);  // Generic RPC — must be last (catch-all dynamic routes)
 
-// Start Background Worker for Persistent Pipeline Queue
-startQueueWorker(pool);
+// Queue Worker removed for Zeabur deployment (in-memory execution only)
 
 const PORT = process.env.PORT || 9000;
 if (process.env.NODE_ENV !== 'production') {

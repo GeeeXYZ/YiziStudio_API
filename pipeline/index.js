@@ -17,28 +17,27 @@ export { uploadToOSS };
 // PIPELINE PER-ORDER DEDUPLICATION
 // ============================================================
 export async function runPipeline(workflowJson, orderContext, pool, options = {}) {
-  // --- Asynchronous Queue Insertion ---
   const orderId = orderContext?.order_id || 'unknown';
   const setIndex = orderContext?.set_index ?? 0;
   
   if (options.simulate) {
-    // If simulate mode, we must run it immediately
+    // If simulate mode, we must run it immediately and wait for results
     return _runPipelineInternal(workflowJson, orderContext, pool, options);
   }
 
   const taskId = crypto.randomUUID();
-  console.log(`[Pipeline Queue] ▶ Queuing pipeline task ${taskId} for ${orderId}_${setIndex}`);
+  console.log(`[Pipeline] ▶ Starting asynchronous pipeline execution ${taskId} for ${orderId}_${setIndex} in-memory...`);
   
-  try {
-    await pool.query(
-      `INSERT INTO yizi_pipeline_queue (id, workflow_json, order_context, status) VALUES ($1, $2, $3, 'pending')`,
-      [taskId, typeof workflowJson === 'string' ? workflowJson : JSON.stringify(workflowJson), JSON.stringify(orderContext)]
-    );
-    return { success: true, queued: true, taskId, message: 'Task queued successfully' };
-  } catch (err) {
-    console.error(`[Pipeline Queue] Failed to queue task ${taskId}:`, err.message);
-    throw err;
-  }
+  // Fire and forget - execute asynchronously without waiting
+  _runPipelineInternal(workflowJson, orderContext, pool, options)
+    .then(result => {
+       console.log(`[Pipeline] 🏁 In-memory execution ${taskId} finished:`, result && result.success ? 'Success' : 'Failed');
+    })
+    .catch(err => {
+       console.error(`[Pipeline] ❌ In-memory execution ${taskId} failed:`, err.message);
+    });
+
+  return { success: true, queued: false, taskId, message: 'Pipeline started asynchronously' };
 }
 
 // Export queue status for monitoring (deprecated/stubbed for backwards compatibility)
