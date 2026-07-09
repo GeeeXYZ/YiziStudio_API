@@ -58,13 +58,18 @@ export async function executeSeedream(node, inputs, env, pool) {
           if (!resp.ok) continue;
           const arrayBuffer = await resp.arrayBuffer();
           let buffer = Buffer.from(arrayBuffer);
-          const sharp = (await import('sharp')).default;
-          buffer = await sharp(buffer)
-            .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: 95 })
-            .toBuffer();
+          try {
+            const sharp = (await import('sharp')).default;
+            buffer = await sharp(buffer)
+              .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
+              .jpeg({ quality: 95 })
+              .toBuffer();
+          } catch (sharpErr) {
+            console.warn(`[Pipeline] sharp unavailable, skipping resize: ${sharpErr.message}`);
+          }
           const base64 = buffer.toString('base64');
-          base64Images.push(`data:image/jpeg;base64,${base64}`);
+          const mime = buffer[0] === 0xFF ? 'image/jpeg' : 'image/png';
+          base64Images.push(`data:${mime};base64,${base64}`);
         } catch (imgErr) {
           console.warn(`[Pipeline] Failed to process image ${url.substring(0, 100)} for Seedream:`, imgErr.message);
         }
