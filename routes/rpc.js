@@ -328,13 +328,22 @@ const rpcHandler = async (req, res) => {
         const val = conditions[key];
         if (val !== undefined && val !== null && val !== '' && val !== '__all__') {
           if (typeof val === 'string') {
-            whereClauses.push(`"${key}" ILIKE $${placeholderIdx}`);
-            values.push(`%${val}%`);
+            if (val === '__empty__') {
+              whereClauses.push(`("${key}" IS NULL OR "${key}" = '')`);
+            } else if (val.startsWith('__exact__:')) {
+              whereClauses.push(`"${key}" = $${placeholderIdx}`);
+              values.push(val.substring(10));
+              placeholderIdx++;
+            } else {
+              whereClauses.push(`"${key}" ILIKE $${placeholderIdx}`);
+              values.push(`%${val}%`);
+              placeholderIdx++;
+            }
           } else {
             whereClauses.push(`"${key}" = $${placeholderIdx}`);
             values.push(val);
+            placeholderIdx++;
           }
-          placeholderIdx++;
         }
       });
 

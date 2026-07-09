@@ -140,6 +140,7 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       id VARCHAR(255) PRIMARY KEY,
       set_id VARCHAR(255),
       content TEXT,
+      tags VARCHAR(255),
       data JSONB,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
@@ -149,6 +150,7 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
     await client.query(`ALTER TABLE "yizi_prompt_groups" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
     await client.query(`ALTER TABLE "yizi_prompt_sets" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
     await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS tags VARCHAR(255)`);
 
     // Phase 1: UPSERT Groups
     let groupsSynced = 0;
@@ -249,12 +251,12 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
       }
 
       const insertPromptQuery = `
-        INSERT INTO "yizi_prompts" (id, set_id, content, data, updated_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        INSERT INTO "yizi_prompts" (id, set_id, content, tags, data, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
         ON CONFLICT (id) DO UPDATE 
-        SET content = EXCLUDED.content, set_id = EXCLUDED.set_id, data = EXCLUDED.data, updated_at = NOW()
+        SET content = EXCLUDED.content, set_id = EXCLUDED.set_id, tags = EXCLUDED.tags, data = EXCLUDED.data, updated_at = NOW()
       `;
-      await client.query(insertPromptQuery, [p.id, p.set_id, p.content, p.data || {}]);
+      await client.query(insertPromptQuery, [p.id, p.set_id, p.content, p.tags || '', p.data || {}]);
     }
     
     await client.query('COMMIT');
@@ -416,10 +418,11 @@ router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
     await client.query(`ALTER TABLE "yizi_prompt_groups" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
     await client.query(`ALTER TABLE "yizi_prompt_sets" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
     await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await client.query(`ALTER TABLE "yizi_prompts" ADD COLUMN IF NOT EXISTS tags VARCHAR(255)`);
 
     const groupsRes = await client.query('SELECT id, name, updated_at FROM "yizi_prompt_groups" ORDER BY created_at ASC');
     const setsRes = await client.query('SELECT id, group_id, title, data, updated_at FROM "yizi_prompt_sets" ORDER BY created_at ASC');
-    const promptsRes = await client.query('SELECT id, set_id, content, data, updated_at FROM "yizi_prompts" ORDER BY created_at ASC');
+    const promptsRes = await client.query('SELECT id, set_id, content, tags, data, updated_at FROM "yizi_prompts" ORDER BY created_at ASC');
     
     let global_updated_at = 0;
     // Assemble the tree
@@ -454,7 +457,7 @@ router.get('/toolkit/prompts/all', authenticateToken, async (req, res) => {
       const pTime = p.updated_at ? new Date(p.updated_at).getTime() : 0;
       if (pTime > global_updated_at) global_updated_at = pTime;
       
-      const prompt = { id: p.id, set_id: p.set_id, content: p.content, data: p.data || {}, updated_at: pTime };
+      const prompt = { id: p.id, set_id: p.set_id, content: p.content, tags: p.tags, data: p.data || {}, updated_at: pTime };
       if (setsMap[p.set_id]) {
         setsMap[p.set_id].prompts.push(prompt);
       }
