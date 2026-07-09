@@ -18,6 +18,7 @@ export async function executeHttpRequest(node, inputs) {
   }
 
   console.log(`[Pipeline] HTTP ${method} to ${reqUrl}`);
+  options.signal = AbortSignal.timeout(60000); // Prevent pipeline queue hanging
   const httpRes = await fetch(reqUrl, options);
   const httpData = await httpRes.json();
   return { response: httpData };

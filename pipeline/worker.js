@@ -130,7 +130,22 @@ async function processQueue(pool) {
 
 export async function startQueueWorker(pool) {
     console.log('[Queue Worker] 🟢 Initializing PostgreSQL LISTEN/NOTIFY daemon...');
-    
+
+    // BUG FIX: Recover orphan tasks stuck in 'processing' from a previous crash/restart.
+    // Any task that has been 'processing' for more than 15 minutes is considered abandoned.
+    try {
+        const staleResult = await pool.query(
+            `UPDATE yizi_pipeline_queue SET status = 'pending', error_msg = 'Auto-recovered from stale processing state', updated_at = NOW()
+             WHERE status = 'processing' AND updated_at < NOW() - INTERVAL '15 minutes'
+             RETURNING id`
+        );
+        if (staleResult.rows.length > 0) {
+            console.log(`[Queue Worker] ♻️ Recovered ${staleResult.rows.length} orphan task(s): ${staleResult.rows.map(r => r.id).join(', ')}`);
+        }
+    } catch (e) {
+        console.warn('[Queue Worker] Failed to recover stale tasks:', e.message);
+    }
+
     // Safety fallback poller (every 60 seconds)
     setInterval(() => processQueue(pool), 60000);
 

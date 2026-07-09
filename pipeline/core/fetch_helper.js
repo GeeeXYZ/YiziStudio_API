@@ -46,6 +46,9 @@ export async function fetchWithRetry(url, options = {}, retryConfig = {}) {
   const noRetry = retryConfig.noRetry === true;
   const maxRetries = noRetry ? 0 : (retryConfig.maxRetries ?? 3);
   const baseDelayMs = retryConfig.baseDelayMs ?? 1500; // 1.5s base delay
+  if (!options.signal) {
+    options.signal = AbortSignal.timeout(60000); // 60s default timeout
+  }
 
   let attempt = 0;
 

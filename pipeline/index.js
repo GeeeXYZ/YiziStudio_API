@@ -237,8 +237,8 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     for (const out of Object.values(context)) {
       if (out && out.uploaded_urls && Array.isArray(out.uploaded_urls)) finalOssImages.push(...out.uploaded_urls);
       if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) finalOssImages.push(...out.final_image_urls);
-      if (out && out.output && Array.isArray(out.output)) rawGeneratedImages.push(...out.output.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
-      if (out && out.output_images && Array.isArray(out.output_images)) rawGeneratedImages.push(...out.output_images.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
+      if (out && out.output && Array.isArray(out.output)) rawGeneratedImages.push(...out.output.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
+      if (out && out.output_images && Array.isArray(out.output_images)) rawGeneratedImages.push(...out.output_images.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
     }
     
     isOssSuccess = finalOssImages.length > 0;
@@ -338,10 +338,22 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                      }
                      orderData.sets[setIndex].is_auto_delivered = true;
                      console.log(`[Pipeline] Auto-delivery ON: Writing ${finalOssImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
-                     nextWaitDelivery = '0';
+                     
+                     // BUG FIX: Only set wait_delivery='0' when ALL sets have delivery images,
+                     // not just the current one. This prevents premature delivery notification
+                     // when multiple sets are being processed concurrently.
+                     const totalSets = orderData.sets.length;
+                     const deliveredSets = orderData.sets.filter(s => s && Array.isArray(s.delivery_imgs) && s.delivery_imgs.length > 0).length;
+                     if (deliveredSets >= totalSets) {
+                       nextWaitDelivery = '0';
+                       console.log(`[Pipeline] All ${totalSets} sets delivered. Setting wait_delivery='0' for order ${orderContext.order_id}`);
+                     } else {
+                       console.log(`[Pipeline] Set ${setIndex} delivered (${deliveredSets}/${totalSets} sets complete). Keeping wait_delivery='1' until all sets finish.`);
+                     }
+
                      if (orderEventEmitter) {
                        try {
-                         orderEventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length });
+                         orderEventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length, setIndex, deliveredSets, totalSets });
                        } catch (sseErr) {}
                      }
                    } else {

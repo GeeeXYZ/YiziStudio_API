@@ -61,11 +61,17 @@ export function resolveInputs(incomingEdges, context) {
     const val = sourceOutputs[edge.sourceHandle || 'output'];
     if (val !== undefined) {
       // Append array if multiple edges connect to the same target handle
-      if (inputs[edge.targetHandle]) {
-        if (Array.isArray(inputs[edge.targetHandle])) {
-          inputs[edge.targetHandle].push(val);
+      if (inputs[edge.targetHandle] !== undefined) {
+        if (!Array.isArray(inputs[edge.targetHandle])) {
+          inputs[edge.targetHandle] = [inputs[edge.targetHandle]];
+        }
+        // BUG FIX: Flatten array values instead of nesting them.
+        // Before: push(['url1']) → [['url1'], ['url2']] (nested, downstream filters silently drop)
+        // After:  push(...['url1']) → ['url1', 'url2'] (flat, all images preserved)
+        if (Array.isArray(val)) {
+          inputs[edge.targetHandle].push(...val);
         } else {
-          inputs[edge.targetHandle] = [inputs[edge.targetHandle], val];
+          inputs[edge.targetHandle].push(val);
         }
       } else {
         inputs[edge.targetHandle] = val;

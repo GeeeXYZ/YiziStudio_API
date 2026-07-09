@@ -22,7 +22,7 @@ export async function executeColorGrading(node, inputs) {
   if (imageUrl.startsWith('data:image')) {
     buffer = Buffer.from(imageUrl.split(',')[1], 'base64');
   } else {
-    const resp = await fetch(imageUrl);
+    const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(30000) });
     if (!resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl}`);
     buffer = Buffer.from(await resp.arrayBuffer());
   }

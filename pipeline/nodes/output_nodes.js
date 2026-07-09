@@ -6,7 +6,7 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   if (Array.isArray(inputs.images) && inputs.images.length > 0) rawImages = inputs.images;
   else if (Array.isArray(inputs.output_images) && inputs.output_images.length > 0) rawImages = inputs.output_images;
   
-  const imagesToUpload = Array.isArray(rawImages) ? rawImages : [rawImages];
+  const imagesToUpload = (Array.isArray(rawImages) ? rawImages : [rawImages]).flat(Infinity);
   const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
   const orderInfo = inputs.order_info || orderContext;
   

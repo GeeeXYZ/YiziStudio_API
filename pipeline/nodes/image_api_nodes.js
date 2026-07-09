@@ -96,7 +96,7 @@ export async function executeSeedream(node, inputs, env, pool) {
   }
 
   if (outputImages.length === 0) throw new Error('Seedream returned no images');
-  return { output: outputImages };
+  return { output_images: outputImages, output: outputImages, images: outputImages };
 }
 
 export async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
