@@ -48,7 +48,14 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
       }
       
       const ossClient = new OSS(ossConfig);
-      const poseFolder = orderContext.sku_pose_folder || 'poses';
+      const poseControl = node.data?.poseSourceControl || 'template';
+      let poseFolder = 'poses';
+      if (poseControl === 'node') {
+        poseFolder = node.data?.nodePoseFolder || 'poses';
+      } else {
+        poseFolder = orderContext.sku_pose_folder || 'poses';
+      }
+      
       const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
       const listResult = await ossClient.list({ prefix, 'max-keys': 1000 });
       if (listResult && listResult.objects) {
