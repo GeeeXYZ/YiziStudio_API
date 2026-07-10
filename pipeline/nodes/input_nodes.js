@@ -61,9 +61,19 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
       if (listResult && listResult.objects) {
         const files = listResult.objects.filter(obj => !obj.name.endsWith('/'));
         if (files.length > 0) {
-          const randomIndex = Math.floor(Math.random() * files.length);
-          const randomFile = files[randomIndex];
+          orderContext._usedPoses = orderContext._usedPoses || new Set();
+          
+          let availableFiles = files.filter(f => !orderContext._usedPoses.has(f.url));
+          if (availableFiles.length === 0) {
+            console.warn(`[Pipeline] All poses in ${poseFolder} used, resetting for model ${outputs.model_uuid}`);
+            availableFiles = files; // Reset if we run out of unique poses
+          }
+
+          const randomIndex = Math.floor(Math.random() * availableFiles.length);
+          const randomFile = availableFiles[randomIndex];
           outputs.random_pose_image = randomFile.url;
+          orderContext._usedPoses.add(randomFile.url);
+          
           console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
         } else {
           console.warn(`[Pipeline] No pose images found for model ${outputs.model_uuid} in folder ${poseFolder}`);
