@@ -119,6 +119,46 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
               mock_order.auto_delivery = skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1';
               console.log(`[Pipeline Trigger] Inheriting auto_delivery from SKU: ${mock_order.auto_delivery}`);
             }
+
+            // Map frontend array format to legacy flat format
+            if (mock_order.prompt_slots && Array.isArray(mock_order.prompt_slots)) {
+              mock_order.prompt_slots.forEach((slot, i) => {
+                if (slot && slot.content && !mock_order[`prompt_slot_${i+1}`]) {
+                  mock_order[`prompt_slot_${i+1}`] = slot.content;
+                }
+              });
+            }
+
+            // Fill empty slots with random prompts from SKU's prompt_set_ids
+            const promptSetIds = skuData.prompt_set_ids || [];
+            if (Array.isArray(promptSetIds)) {
+              for (let i = 0; i < promptSetIds.length; i++) {
+                const setId = promptSetIds[i];
+                if (!setId) continue;
+                
+                const slotKey = `prompt_slot_${i + 1}`;
+                if (!mock_order[slotKey] || mock_order[slotKey].trim() === '') {
+                  try {
+                    let promptRes;
+                    try {
+                      promptRes = await pool.query(`SELECT data->>'content' as content FROM "yizi_prompts" WHERE data->>'set_id' = $1`, [setId]);
+                    } catch (err) {
+                      promptRes = await pool.query(`SELECT data->>'content' as content FROM "yizi_prompt" WHERE data->>'set_id' = $1`, [setId]);
+                    }
+                    if (promptRes && promptRes.rows.length > 0) {
+                       const validPrompts = promptRes.rows.filter(r => r.content && r.content.trim() !== '');
+                       if (validPrompts.length > 0) {
+                         const randomIdx = Math.floor(Math.random() * validPrompts.length);
+                         mock_order[slotKey] = validPrompts[randomIdx].content;
+                         console.log(`[Pipeline] Auto-filled ${slotKey} with random prompt from set ${setId}: ${mock_order[slotKey]}`);
+                       }
+                    }
+                  } catch(e) {
+                    console.error(`[Pipeline] Failed to fetch random prompt for ${slotKey} from set ${setId}`, e.message);
+                  }
+                }
+              }
+            }
             
             if (skuData.workflow) {
               const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
