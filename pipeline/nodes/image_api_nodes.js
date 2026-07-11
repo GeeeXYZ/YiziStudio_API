@@ -240,11 +240,15 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     fd.append('prompt', prompt);
     if (size && size !== 'auto') fd.append('size', size);
 
+    // Log all reference image URLs for debugging
+    console.log(`[ApiYi] Reference images to fetch (${combined_images.length}):`, combined_images);
+
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
+      console.log(`[ApiYi] Fetching ref image ${i+1}/${combined_images.length}: ${imgUrl}`);
       try {
         const imgRes = await fetchWithRetry(imgUrl, { signal: AbortSignal.timeout(60000) });
-        if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${imgUrl}`);
         const imgBlob = await imgRes.blob();
         let ext = 'png';
         if (imgBlob.type) {
@@ -253,7 +257,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
         }
         fd.append('image', imgBlob, `image_${i}.${ext}`);
       } catch (e) {
-        throw new Error(`ApiYi failed to process reference image ${i+1}: ${e.message}`);
+        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${imgUrl} — Error: ${e.message}`);
       }
     }
     reqBody = fd;
