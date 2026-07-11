@@ -152,13 +152,21 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
               const slotKey = `prompt_slot_${i + 1}`;
               if (!mock_order[slotKey] || String(mock_order[slotKey]).trim() === '') {
                 try {
-                  // Use same query as client.js: yizi_prompts has top-level content & set_id columns
+                  // Dual-format query: yizi_prompts may store content/set_id as either
+                  //   (A) top-level columns (old format, e.g. Tee7 era)  
+                  //   (B) inside data JSONB (new format after prompt library restructure)
+                  // COALESCE picks whichever is non-null, so both formats work.
                   const promptRes = await pool.query(
-                    'SELECT content FROM yizi_prompts WHERE set_id = $1 ORDER BY RANDOM() LIMIT 1', [setId]
+                    `SELECT COALESCE(content, data->>'content') as content 
+                     FROM yizi_prompts 
+                     WHERE set_id = $1 OR data->>'set_id' = $1
+                     ORDER BY RANDOM() LIMIT 1`, [setId]
                   );
                   if (promptRes.rows.length > 0 && promptRes.rows[0].content) {
                     mock_order[slotKey] = promptRes.rows[0].content;
                     console.log(`[Pipeline] Auto-filled ${slotKey} from set ${setId}: "${mock_order[slotKey].substring(0, 60)}..."`);
+                  } else {
+                    console.warn(`[Pipeline] No prompts found for ${slotKey} in set ${setId}`);
                   }
                 } catch(e) {
                   console.warn(`[Pipeline] Failed to random pick for ${slotKey} from set ${setId}:`, e.message);

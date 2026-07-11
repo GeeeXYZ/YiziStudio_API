@@ -361,10 +361,13 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
               if (globalSlot && globalSlot.content) {
                   return globalSlot.content;
               }
-              // Random pick from this prompt library
+              // Random pick from this prompt library (supports both old column format and new JSONB format)
               try {
                   const randomRes = await pool.query(
-                      'SELECT content FROM yizi_prompts WHERE set_id = $1 ORDER BY RANDOM() LIMIT 1', [setId]
+                      `SELECT COALESCE(content, data->>'content') as content 
+                       FROM yizi_prompts 
+                       WHERE set_id = $1 OR data->>'set_id' = $1
+                       ORDER BY RANDOM() LIMIT 1`, [setId]
                   );
                   return randomRes.rows[0]?.content || '';
               } catch (e) {
