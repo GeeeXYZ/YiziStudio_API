@@ -100,7 +100,9 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
         const setIndex = mock_order.set_index || 0;
         if (orderData.sets && orderData.sets[setIndex]) {
           mock_order.images = mock_order.images || orderData.sets[setIndex].images || [];
-          mock_order.selectedPoseUrl = mock_order.selectedPoseUrl || orderData.sets[setIndex].selectedPoseUrl;
+          // NOTE: Do NOT inherit selectedPoseUrl from the order.
+          // The order stores the pose URL from order-time, which may be stale (deleted from OSS)
+          // or from an old template config. Let the pipeline pick a fresh pose from current settings.
         }
 
         if (orderData.planId) {
