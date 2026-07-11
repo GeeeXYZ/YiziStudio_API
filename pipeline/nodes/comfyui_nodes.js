@@ -59,7 +59,9 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
         comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
         comfyNode.inputs.index = orderContext.set_index || 0;
         comfyNode.inputs.lora_prompt = loraPrompt;
-        comfyNode.inputs.prompt = orderContext.prompt || '';
+        // prompt_override input takes priority over orderContext.prompt
+        const promptOverride = inputs.prompt_override;
+        comfyNode.inputs.prompt = (typeof promptOverride === 'string' && promptOverride.trim()) ? promptOverride : (orderContext.prompt || '');
         // Propagate node-level auto_delivery into orderContext for backend delivery decision
         // (decoupled from ComfyUI — ComfyUI always calls back, backend decides whether to push to delivery pool)
         if (node.data.auto_delivery === true) {
