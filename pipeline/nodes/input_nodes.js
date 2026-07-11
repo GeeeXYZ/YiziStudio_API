@@ -1,4 +1,4 @@
-import OSS from 'ali-oss';
+// Pose images are now fetched from database (yizi_model table) as single source of truth
 
 export async function executeToolkitInput(node, inputs, orderContext, env, pool) {
   const imgArray = orderContext.toolkit_images || [];
@@ -32,22 +32,8 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
   outputs.random_pose_image = '';
   if (orderContext.selectedPoseUrl) {
     outputs.random_pose_image = orderContext.selectedPoseUrl;
-  } else if (outputs.model_uuid) {
+  } else if (outputs.model_uuid && pool) {
     try {
-      const ossConfig = {
-        region: env.OSS_REGION,
-        accessKeyId: env.OSS_ACCESS_KEY_ID,
-        accessKeySecret: env.OSS_ACCESS_KEY_SECRET,
-        bucket: env.OSS_BUCKET,
-        secure: true,
-        timeout: 10000
-      };
-      
-      if (env.OSS_ENDPOINT) {
-        ossConfig.endpoint = env.OSS_ENDPOINT;
-      }
-      
-      const ossClient = new OSS(ossConfig);
       const poseControl = node.data?.poseSourceControl || 'template';
       let poseFolder = 'poses';
       if (poseControl === 'node') {
@@ -55,34 +41,52 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
       } else {
         poseFolder = orderContext.sku_pose_folder || 'poses';
       }
-      
-      const prefix = `models/${outputs.model_uuid}/${poseFolder}/`;
-      const listResult = await ossClient.list({ prefix, 'max-keys': 1000 });
-      if (listResult && listResult.objects) {
-        const files = listResult.objects.filter(obj => !obj.name.endsWith('/'));
-        if (files.length > 0) {
+
+      // Query the database for the model's pose URLs (single source of truth)
+      const modelResult = await pool.query('SELECT poses, half_poses, special_poses FROM "yizi_model" WHERE uuid = $1', [outputs.model_uuid]);
+      if (modelResult.rows.length > 0) {
+        const modelRow = modelResult.rows[0];
+        
+        // Map folder name to the correct DB column
+        let poseUrls = [];
+        if (poseFolder === 'poses') {
+          poseUrls = modelRow.poses || [];
+        } else if (poseFolder === 'half_poses') {
+          poseUrls = modelRow.half_poses || [];
+        } else if (poseFolder === 'special_poses') {
+          poseUrls = modelRow.special_poses || [];
+        }
+
+        // Parse if stored as JSON string
+        if (typeof poseUrls === 'string') {
+          try { poseUrls = JSON.parse(poseUrls); } catch(e) { poseUrls = []; }
+        }
+
+        // Filter to only valid URLs
+        poseUrls = (Array.isArray(poseUrls) ? poseUrls : []).filter(u => typeof u === 'string' && u.trim() !== '');
+
+        if (poseUrls.length > 0) {
           orderContext._usedPoses = orderContext._usedPoses || new Set();
           
-          let availableFiles = files.filter(f => !orderContext._usedPoses.has(f.url));
-          if (availableFiles.length === 0) {
+          let available = poseUrls.filter(u => !orderContext._usedPoses.has(u));
+          if (available.length === 0) {
             console.warn(`[Pipeline] All poses in ${poseFolder} used, resetting for model ${outputs.model_uuid}`);
-            availableFiles = files; // Reset if we run out of unique poses
+            available = poseUrls;
           }
 
-          const randomIndex = Math.floor(Math.random() * availableFiles.length);
-          const randomFile = availableFiles[randomIndex];
-          // Construct public URL manually — ali-oss .url may return internal/http domain
-          const ossPublicUrl = `https://${env.OSS_BUCKET}.${env.OSS_REGION}.aliyuncs.com/${randomFile.name}`;
-          outputs.random_pose_image = ossPublicUrl;
-          orderContext._usedPoses.add(ossPublicUrl);
+          const randomIndex = Math.floor(Math.random() * available.length);
+          outputs.random_pose_image = available[randomIndex];
+          orderContext._usedPoses.add(outputs.random_pose_image);
           
-          console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
+          console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid} from DB (${poseFolder}):`, outputs.random_pose_image);
         } else {
-          console.warn(`[Pipeline] No pose images found for model ${outputs.model_uuid} in folder ${poseFolder}`);
+          console.warn(`[Pipeline] No pose images found in DB for model ${outputs.model_uuid} in column ${poseFolder}`);
         }
+      } else {
+        console.warn(`[Pipeline] Model ${outputs.model_uuid} not found in database`);
       }
     } catch (err) {
-      console.warn(`[Pipeline] Failed to fetch random pose from OSS for model ${outputs.model_uuid}:`, err.message);
+      console.warn(`[Pipeline] Failed to fetch random pose for model ${outputs.model_uuid}:`, err.message);
     }
   }
   return outputs;
