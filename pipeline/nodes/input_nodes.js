@@ -71,8 +71,10 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
 
           const randomIndex = Math.floor(Math.random() * availableFiles.length);
           const randomFile = availableFiles[randomIndex];
-          outputs.random_pose_image = randomFile.url;
-          orderContext._usedPoses.add(randomFile.url);
+          // Construct public URL manually — ali-oss .url may return internal/http domain
+          const ossPublicUrl = `https://${env.OSS_BUCKET}.${env.OSS_REGION}.aliyuncs.com/${randomFile.name}`;
+          outputs.random_pose_image = ossPublicUrl;
+          orderContext._usedPoses.add(ossPublicUrl);
           
           console.log(`[Pipeline] Randomly picked pose image for ${outputs.model_uuid}:`, outputs.random_pose_image);
         } else {
