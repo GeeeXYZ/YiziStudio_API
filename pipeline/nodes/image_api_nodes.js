@@ -217,7 +217,12 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
   if (!apiKey) throw new Error('ApiYi API Key not configured');
 
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
-  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  if (Array.isArray(prompt)) {
+    prompt = prompt.map(p => typeof p === 'string' ? p : JSON.stringify(p)).filter(Boolean).join('\n');
+  } else if (typeof prompt === 'object') {
+    prompt = JSON.stringify(prompt);
+  }
+  prompt = String(prompt);
   const modelId = node.data.modelId || 'gpt-image-2-vip';
   const size = node.data.imageResolution || 'auto';
 
@@ -245,10 +250,11 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
 
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
-      console.log(`[ApiYi] Fetching ref image ${i+1}/${combined_images.length}: ${imgUrl}`);
+      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
+      console.log(`[ApiYi] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
       try {
         const imgRes = await fetchWithRetry(imgUrl, { signal: AbortSignal.timeout(60000) });
-        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${imgUrl}`);
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
         const imgBlob = await imgRes.blob();
         let ext = 'png';
         if (imgBlob.type) {
@@ -257,7 +263,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
         }
         fd.append('image', imgBlob, `image_${i}.${ext}`);
       } catch (e) {
-        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${imgUrl} — Error: ${e.message}`);
+        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
       }
     }
     reqBody = fd;
@@ -270,6 +276,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
   }
 
   console.log(`[ApiYi] Request: endpoint=${endpointUrl} | model=${modelId} | size=${size} | images=${combined_images.length} | hasRefImages=${hasReferenceImages}`);
+  console.log(`[ApiYi] Prompt (preview): ${String(prompt).substring(0, 200)}`);
   console.log(`[ApiYi] size from node.data.imageResolution = "${node.data.imageResolution}"`);
 
   const res = await fetchWithRetry(endpointUrl, {
@@ -281,7 +288,8 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`ApiYi API error: [${res.status}] ${errText.substring(0, 500)}`);
+    console.error(`[ApiYi] API Error Detail. Status: ${res.status}, Body: ${errText}, Prompt sent: ${prompt}`);
+    throw new Error(`ApiYi API error: [${res.status}] ${errText.substring(0, 1000)} (Prompt sent: ${String(prompt).substring(0, 50)}...)`);
   }
 
   const data = await res.json();
