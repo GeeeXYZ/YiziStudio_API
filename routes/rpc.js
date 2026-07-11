@@ -204,55 +204,48 @@ const rpcHandler = async (req, res) => {
       }
     }
 
-    // C. Custom handler for yizi_model (assets/list)
+    // C. Custom handler for yizi_model (assets/list) — OSS is the single source of truth
     if (db_name === 'yizi_model' && action === 'assets/list') {
       const uuid = params.uuid;
-      const type = params.type; // poses, half_body_poses, specific_poses, gallery
+      const type = params.type; // poses, half_poses, special_poses, imgs
       
       if (!uuid) {
         return res.json({ msg: 'err', info: 'Missing model uuid' });
       }
       
-      const result = await pool.query('SELECT * FROM "yizi_model" WHERE "uuid" = $1', [uuid]);
-      if (result.rows.length === 0) {
-        return res.json({ msg: 'err', info: 'Model not found' });
-      }
+      // Map type to OSS folder name
+      let folder = type || 'poses';
       
-      const model = result.rows[0];
-      let colName = 'poses';
-      if (type === 'poses') colName = 'poses';
-      else if (type === 'half_body_poses') colName = 'half_poses';
-      else if (type === 'specific_poses') colName = 'spacial_poses';
-      else if (type === 'gallery') colName = 'imgs';
-      
-      const rawVal = model[colName];
-      let list = [];
-      if (rawVal) {
-        if (typeof rawVal === 'string') {
-          const trimmed = rawVal.trim();
-          if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-            try {
-              list = JSON.parse(trimmed);
-            } catch (e) {
-              list = trimmed.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-            }
-          } else {
-            list = trimmed.split(',').map(s => s.trim()).filter(Boolean);
+      try {
+        const ossClient = new OSS({
+          region: process.env.OSS_REGION,
+          accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+          accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+          bucket: process.env.OSS_BUCKET,
+          secure: true,
+          timeout: 10000
+        });
+        
+        const prefix = `models/${uuid}/${folder}/`;
+        const listResult = await ossClient.list({ prefix, 'max-keys': 1000 });
+        const ossDomain = `https://${process.env.OSS_BUCKET}.${process.env.OSS_REGION}.aliyuncs.com`;
+        const list = (listResult?.objects || [])
+          .filter(obj => !obj.name.endsWith('/'))
+          .map(obj => `${ossDomain}/${obj.name}`);
+        
+        return res.json({
+          msg: 'ok',
+          result: {
+            list: list,
+            total: list.length,
+            page: 1,
+            page_size: list.length
           }
-        } else if (Array.isArray(rawVal)) {
-          list = rawVal;
-        }
+        });
+      } catch (err) {
+        console.error('[assets/list] OSS scan failed:', err.message);
+        return res.json({ msg: 'err', info: 'Failed to scan OSS: ' + err.message });
       }
-      
-      return res.json({
-        msg: 'ok',
-        result: {
-          list: list,
-          total: list.length,
-          page: 1,
-          page_size: list.length
-        }
-      });
     }
 
     // D. Custom handler for yizi_users (points/ticket)
