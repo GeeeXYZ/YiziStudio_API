@@ -398,3 +398,92 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
     throw pipelineErr;
   }
 }
+
+export async function executeGrokImagine(node, inputs, env, pool) {
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  const apiKey = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
+  if (!apiKey) throw new Error('GROK_API_KEY is not configured');
+
+  const resolution = node.data.resolution || '2k';
+  const aspectRatio = node.data.aspectRatio || '16:9';
+  const n = parseInt(node.data.n) || 1;
+
+  let images = [];
+  for (let i = 1; i <= 3; i++) {
+    const val = inputs[\image_\\];
+    if (val !== undefined) {
+      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      else if (val) images.push(val);
+    }
+  }
+
+  const base64Images = [];
+  if (images.length > 0) {
+    for (const url of images) {
+      if (!url) continue;
+      if (url.startsWith('data:image')) {
+        base64Images.push(url);
+      } else {
+        try {
+          const resp = await fetchWithRetry(url, { signal: AbortSignal.timeout(60000) });
+          if (!resp.ok) continue;
+          const arrayBuffer = await resp.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const base64 = buffer.toString('base64');
+          const mime = buffer[0] === 0xFF ? 'image/jpeg' : 'image/png';
+          base64Images.push(\data:\;base64,\\);
+        } catch (imgErr) {
+          console.warn(\[Pipeline] Failed to process image \ for Grok Imagine:\, imgErr.message);
+        }
+      }
+    }
+  }
+
+  let endpoint = 'https://api.x.ai/v1/images/generations';
+  const payload = {
+    model: 'grok-imagine-image-quality',
+    prompt: prompt,
+    resolution: resolution,
+  };
+  
+  if (aspectRatio && aspectRatio !== 'auto') {
+    payload.aspect_ratio = aspectRatio;
+  }
+
+  if (base64Images.length === 0) {
+    payload.n = n;
+  } else if (base64Images.length === 1) {
+    endpoint = 'https://api.x.ai/v1/images/edits';
+    payload.image = { type: 'image_url', url: base64Images[0] };
+  } else if (base64Images.length >= 2) {
+    endpoint = 'https://api.x.ai/v1/images/edits';
+    payload.images = base64Images.slice(0, 3).map(url => ({ type: 'image_url', url }));
+  }
+
+  console.log(\[Pipeline] Grok Imagine executing... endpoint: \, mode: \\);
+  const res = await fetchWithRetry(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': \Bearer \\ },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(300000)
+  }, { noRetry: true });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(\Grok API Error [\]: \\);
+  }
+
+  const data = await res.json();
+  const outputImages = [];
+  if (data.data && data.data.length > 0) {
+    for (const item of data.data) {
+      if (item.url) outputImages.push(item.url);
+      else if (item.b64_json) outputImages.push(\data:image/png;base64,\\);
+    }
+  }
+
+  if (outputImages.length === 0) throw new Error('Grok API returned no images');
+  return { output_images: outputImages, output: outputImages, images: outputImages };
+}
+

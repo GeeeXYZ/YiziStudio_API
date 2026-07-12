@@ -4,7 +4,7 @@ import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
 import { executeToolkitInput, executeOrderInput, executeFloatInput } from './nodes/input_nodes.js';
 import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary } from './nodes/llm_nodes.js';
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
-import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset } from './nodes/image_api_nodes.js';
+import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset, executeGrokImagine } from './nodes/image_api_nodes.js';
 import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { executeColorGrading } from './nodes/color_grading_node.js';
@@ -56,6 +56,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext);
     case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext);
     case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext);
+    case 'grok_imagine': return await executeGrokImagine(node, inputs, env, pool);
     
     case 'text_input': return await executeTextInput(node, inputs);
     case 'float_input': return await executeFloatInput(node, inputs);
@@ -147,7 +148,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
           prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本',
           string_concat: '文本拼接', llm_call: '大模型调用', http_request: 'HTTP 请求',
-          seedream: '生图推理', preset_openrouter: '大模型生图推理'
+          seedream: '即梦生图', preset_openrouter: '大模型绘图', grok_imagine: 'Grok Imagine 推理'
         };
 
         const traceLog = {
