@@ -3,7 +3,7 @@ import { fetchWithRetry } from '../core/fetch_helper.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export async function executeSeedream(node, inputs, env, pool) {
+export async function executeSeedream(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const globalEndpointId = env.VOLCENGINE_ENDPOINT_ID || await getSetting(pool, 'VOLCENGINE_ENDPOINT_ID');
@@ -54,7 +54,7 @@ export async function executeSeedream(node, inputs, env, pool) {
         base64Images.push(url);
       } else {
         try {
-          const resp = await fetchWithRetry(url, { signal: AbortSignal.timeout(60000) });
+          const resp = await fetchWithRetry(url, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
           if (!resp.ok) continue;
           const arrayBuffer = await resp.arrayBuffer();
           let buffer = Buffer.from(arrayBuffer);
@@ -83,7 +83,7 @@ export async function executeSeedream(node, inputs, env, pool) {
     method: 'POST',
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(300000)
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000)
   }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
@@ -104,7 +104,7 @@ export async function executeSeedream(node, inputs, env, pool) {
   return { output_images: outputImages, output: outputImages, images: outputImages };
 }
 
-export async function executeOpenRouterPreset(node, inputs, env, pool, orderContext) {
+export async function executeOpenRouterPreset(node, inputs, env, pool, orderContext, abortSignal) {
   const configuredEndpoint = env.OPENROUTER_API_ENDPOINT || await getSetting(pool, 'OPENROUTER_API_ENDPOINT') || 'https://openrouter.ai/api/v1/chat/completions';
   const endpoint = configuredEndpoint.includes('/chat/completions') ? configuredEndpoint : `${configuredEndpoint.replace(/\/$/, '')}/chat/completions`;
   const apiKey = env.OPENROUTER_API_KEY || await getSetting(pool, 'OPENROUTER_API_KEY');
@@ -153,7 +153,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(180000)
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000)
   }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
@@ -210,7 +210,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
 
-export async function executeApiyiPreset(node, inputs, env, pool, orderContext) {
+export async function executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal) {
   const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
   const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
 
@@ -253,7 +253,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
       const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
       console.log(`[ApiYi] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
       try {
-        const imgRes = await fetchWithRetry(imgUrl, { signal: AbortSignal.timeout(60000) });
+        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
         if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
         const imgBlob = await imgRes.blob();
         let ext = 'png';
@@ -283,7 +283,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
     method: 'POST',
     headers: headers,
     body: reqBody,
-    signal: AbortSignal.timeout(360000)
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(360000)]) : AbortSignal.timeout(360000)
   }, { noRetry: true }); // NEVER retry paid image generation API calls
 
   if (!res.ok) {
@@ -307,7 +307,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext) 
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
 
-export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) {
+export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal) {
   const endpoint = env.GRSAI_API_ENDPOINT || await getSetting(pool, 'GRSAI_API_ENDPOINT');
   const apiKey = env.GRSAI_API_KEY || await getSetting(pool, 'GRSAI_API_KEY');
 
@@ -342,7 +342,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(30000)
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)
   });
 
   if (!res.ok) {
@@ -367,7 +367,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
       try {
         pollRes = await fetchWithRetry(`${resultUrl}?id=${encodeURIComponent(taskId)}`, {
           headers: { 'Authorization': `Bearer ${token}` },
-          signal: AbortSignal.timeout(15000)
+          signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000)
         });
       } catch (fetchErr) {
         consecutiveErrors++;
@@ -399,7 +399,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext) 
   }
 }
 
-export async function executeGrokImagine(node, inputs, env, pool) {
+export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   const apiKey = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
@@ -426,7 +426,7 @@ export async function executeGrokImagine(node, inputs, env, pool) {
         base64Images.push(url);
       } else {
         try {
-          const resp = await fetchWithRetry(url, { signal: AbortSignal.timeout(60000) });
+          const resp = await fetchWithRetry(url, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
           if (!resp.ok) continue;
           const arrayBuffer = await resp.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
@@ -466,7 +466,7 @@ export async function executeGrokImagine(node, inputs, env, pool) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(300000)
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000)
   }, { noRetry: true });
 
   if (!res.ok) {

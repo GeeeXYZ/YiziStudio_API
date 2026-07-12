@@ -45,31 +45,31 @@ export function getPipelineQueueStatus() {
   return { inflight: [] };
 }
 
-export async function runSingleNode(node, inputs, env, pool, orderContext, executionState = null) {
+export async function runSingleNode(node, inputs, env, pool, orderContext, executionState = null, abortSignal = null) {
   switch (node.type) {
     case 'toolkit_input': return await executeToolkitInput(node, inputs, orderContext, env, pool);
     case 'order_input': return await executeOrderInput(node, inputs, orderContext, env, pool);
     
     case 'preset_seedream':
-    case 'seedream': return await executeSeedream(node, inputs, env, pool);
+    case 'seedream': return await executeSeedream(node, inputs, env, pool, abortSignal);
     
-    case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext);
-    case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext);
-    case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext);
-    case 'grok_imagine': return await executeGrokImagine(node, inputs, env, pool);
+    case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal);
+    case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal);
+    case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext, abortSignal);
+    case 'grok_imagine': return await executeGrokImagine(node, inputs, env, pool, abortSignal);
     
     case 'text_input': return await executeTextInput(node, inputs);
     case 'float_input': return await executeFloatInput(node, inputs);
     case 'prompt_board': return await executePromptBoard(node, inputs, orderContext);
     case 'string_concat': return await executeStringConcat(node, inputs);
-    case 'llm_call': return await executeLlmCall(node, inputs, env, pool);
+    case 'llm_call': return await executeLlmCall(node, inputs, env, pool, abortSignal);
     case 'prompt_library': return await executePromptLibrary(node, inputs, pool, executionState);
     
     case 'image_preview': return await executeImagePreview(node, inputs);
     case 'text_preview': return await executeTextPreview(node, inputs);
-    case 'comfy_remote': return await executeComfyRemote(node, inputs, orderContext, env, pool);
+    case 'comfy_remote': return await executeComfyRemote(node, inputs, orderContext, env, pool, abortSignal);
     case 'oss_output': return await executeOssOutput(node, inputs, orderContext, env);
-    case 'http_request': return await executeHttpRequest(node, inputs);
+    case 'http_request': return await executeHttpRequest(node, inputs, abortSignal);
     case 'color_grading': return await executeColorGrading(node, inputs);
     
     default:
@@ -123,6 +123,9 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
       }
     };
 
+    const abortController = new AbortController();
+    const abortSignal = abortController.signal;
+
     console.log(`[Pipeline] Starting CONCURRENT execution of ${totalNodes} nodes... (Simulate: ${simulate})`);
     const nodePromises = {};
 
@@ -165,7 +168,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
 
         // In test/simulate mode, we now execute all nodes normally so users can see real results
         try {
-          outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState);
+          outputs = await runSingleNode(node, inputs, process.env, pool, orderContext, executionState, abortSignal);
         } catch (nodeExecErr) {
           traceLog.status = 'error';
           traceLog.error = nodeExecErr.message;
@@ -214,7 +217,8 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
       ]);
     } catch (timeoutErr) {
       // Global timeout hit — treat all incomplete nodes as failed
-      console.error(`[Pipeline] GLOBAL TIMEOUT after ${PIPELINE_TIMEOUT_MS/1000}s`);
+      console.error(`[Pipeline] GLOBAL TIMEOUT after ${PIPELINE_TIMEOUT_MS/1000}s. Aborting all background nodes.`);
+      abortController.abort(timeoutErr);
       allResults = Object.values(nodePromises).map(() => ({ status: 'rejected', reason: timeoutErr }));
     }
     
