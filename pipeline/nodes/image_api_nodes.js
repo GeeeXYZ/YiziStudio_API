@@ -442,7 +442,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
 
   let endpoint = 'https://api.x.ai/v1/images/generations';
   const payload = {
-    model: 'grok-imagine-image-quality',
+    model: node.data.modelId || 'grok-imagine-image-quality',
     prompt: prompt,
     resolution: resolution,
   };
