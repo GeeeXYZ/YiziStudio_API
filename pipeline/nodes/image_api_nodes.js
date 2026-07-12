@@ -402,9 +402,20 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
 export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
-  const globalAk = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
-  if (!globalAk) throw new Error('GROK_API_KEY is not configured');
-  const akArr = globalAk.includes(',') ? globalAk.split(',').map(s => s.trim()).filter(Boolean) : [globalAk.trim()];
+  const globalAk1 = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
+  const globalAk2 = env.GROK_API_KEY_2 || await getSetting(pool, 'GROK_API_KEY_2');
+
+  const akArr = [];
+  if (globalAk1) {
+    if (globalAk1.includes(',')) akArr.push(...globalAk1.split(',').map(s => s.trim()).filter(Boolean));
+    else akArr.push(globalAk1.trim());
+  }
+  if (globalAk2) {
+    if (globalAk2.includes(',')) akArr.push(...globalAk2.split(',').map(s => s.trim()).filter(Boolean));
+    else akArr.push(globalAk2.trim());
+  }
+
+  if (akArr.length === 0) throw new Error('GROK_API_KEY is not configured');
 
   const resolution = node.data.resolution || '2k';
   const aspectRatio = node.data.aspectRatio || '16:9';
