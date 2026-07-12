@@ -411,7 +411,7 @@ export async function executeGrokImagine(node, inputs, env, pool) {
 
   let images = [];
   for (let i = 1; i <= 3; i++) {
-    const val = inputs[\image_\\];
+    const val = inputs[`image_${i}`];
     if (val !== undefined) {
       if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
       else if (val) images.push(val);
@@ -432,9 +432,9 @@ export async function executeGrokImagine(node, inputs, env, pool) {
           const buffer = Buffer.from(arrayBuffer);
           const base64 = buffer.toString('base64');
           const mime = buffer[0] === 0xFF ? 'image/jpeg' : 'image/png';
-          base64Images.push(\data:\;base64,\\);
+          base64Images.push(`data:${mime};base64,${base64}`);
         } catch (imgErr) {
-          console.warn(\[Pipeline] Failed to process image \ for Grok Imagine:\, imgErr.message);
+          console.warn(`[Pipeline] Failed to process image ${url.substring(0, 100)} for Grok Imagine:`, imgErr.message);
         }
       }
     }
@@ -461,17 +461,17 @@ export async function executeGrokImagine(node, inputs, env, pool) {
     payload.images = base64Images.slice(0, 3).map(url => ({ type: 'image_url', url }));
   }
 
-  console.log(\[Pipeline] Grok Imagine executing... endpoint: \, mode: \\);
+  console.log(`[Pipeline] Grok Imagine executing... endpoint: ${endpoint}, mode: ${base64Images.length === 0 ? 'generation' : 'edit'}`);
   const res = await fetchWithRetry(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': \Bearer \\ },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(300000)
   }, { noRetry: true });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(\Grok API Error [\]: \\);
+    throw new Error(`Grok API Error [${res.status}]: ${errText}`);
   }
 
   const data = await res.json();
@@ -479,7 +479,7 @@ export async function executeGrokImagine(node, inputs, env, pool) {
   if (data.data && data.data.length > 0) {
     for (const item of data.data) {
       if (item.url) outputImages.push(item.url);
-      else if (item.b64_json) outputImages.push(\data:image/png;base64,\\);
+      else if (item.b64_json) outputImages.push(`data:image/png;base64,${item.b64_json}`);
     }
   }
 
