@@ -88,7 +88,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
           model_name: orderContext.model_name || '',
           model_avatar: orderContext.modelData?.imgs?.[0] || orderContext.modelData?.main_img || '',
           model_full_body: orderContext.modelData?.imgs?.[1] || orderContext.modelData?.main_img || '',
-          model_special_pose: orderContext.modelData?.special_poses?.[0] || '',
+          model_special_pose: orderContext.modelData?.special_poses?.[0] || '', // Legacy fallback; pipeline uses OSS-based pose fetching now
           order_id: `${orderContext.openid || ''}.${orderContext.order_id || ''}`,
           real_openid: orderContext.openid || 'unknown',
           real_order_id: orderContext.order_id || 'unknown',
