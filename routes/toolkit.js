@@ -8,6 +8,47 @@ const router = express.Router();
 
 global.visionTasks = global.visionTasks || {};
 
+// GET /toolkit/prompts/history — Read logged-in admin's prompt history
+router.get('/toolkit/prompts/history', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    if (!email) return res.json({ msg: 'err', info: 'Unauthorized' });
+
+    const result = await pool.query('SELECT data FROM "yizi_admins" WHERE email = $1', [email]);
+    if (result.rows.length === 0) return res.json({ msg: 'err', info: 'User not found' });
+
+    const data = typeof result.rows[0].data === 'string' ? JSON.parse(result.rows[0].data) : (result.rows[0].data || {});
+    return res.json({ msg: 'ok', history: data.prompt_history || [] });
+  } catch (err) {
+    console.error('[Prompt History Read Error]', err);
+    return res.json({ msg: 'err', info: err.message });
+  }
+});
+
+// POST /toolkit/prompts/history — Save logged-in admin's prompt history
+router.post('/toolkit/prompts/history', authenticateToken, async (req, res) => {
+  const { history } = req.body;
+  if (!Array.isArray(history)) return res.json({ msg: 'err', info: 'Invalid history format' });
+
+  try {
+    const email = req.user.email;
+    if (!email) return res.json({ msg: 'err', info: 'Unauthorized' });
+
+    const result = await pool.query('SELECT data FROM "yizi_admins" WHERE email = $1', [email]);
+    if (result.rows.length === 0) return res.json({ msg: 'err', info: 'User not found' });
+
+    const data = typeof result.rows[0].data === 'string' ? JSON.parse(result.rows[0].data) : (result.rows[0].data || {});
+    data.prompt_history = history;
+
+    await pool.query('UPDATE "yizi_admins" SET data = $1 WHERE email = $2', [JSON.stringify(data), email]);
+    
+    return res.json({ msg: 'ok' });
+  } catch (err) {
+    console.error('[Prompt History Save Error]', err);
+    return res.json({ msg: 'err', info: err.message });
+  }
+});
+
 // POST /toolkit/upload_to_oss_direct — Manually upload URLs to OSS for a specific order
 router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res) => {
   let { urls, openid, order_id, set_index } = req.body;
