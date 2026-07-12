@@ -59,6 +59,8 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
         comfyNode.inputs.order_id = `${orderContext.openid}.${orderContext.order_id}`;
         comfyNode.inputs.index = orderContext.set_index || 0;
         comfyNode.inputs.lora_prompt = loraPrompt;
+        if (inputs.float_val_1 !== undefined) comfyNode.inputs.float_val_1 = inputs.float_val_1;
+        if (inputs.float_val_2 !== undefined) comfyNode.inputs.float_val_2 = inputs.float_val_2;
         // prompt_override input takes priority over orderContext.prompt
         const promptOverride = inputs.prompt_override;
         comfyNode.inputs.prompt = (typeof promptOverride === 'string' && promptOverride.trim()) ? promptOverride : (orderContext.prompt || '');

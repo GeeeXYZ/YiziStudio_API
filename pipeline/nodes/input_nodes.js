@@ -83,3 +83,11 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
   }
   return outputs;
 }
+
+export async function executeFloatInput(node, inputs) {
+  let val = parseFloat(node.data?.value);
+  if (isNaN(val)) val = 0.00;
+  return {
+    output: Number(val.toFixed(2))
+  };
+}

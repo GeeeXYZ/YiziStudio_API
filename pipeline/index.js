@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { orderEventEmitter } from '../events.js';
 import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
-import { executeToolkitInput, executeOrderInput } from './nodes/input_nodes.js';
+import { executeToolkitInput, executeOrderInput, executeFloatInput } from './nodes/input_nodes.js';
 import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary } from './nodes/llm_nodes.js';
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
 import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset } from './nodes/image_api_nodes.js';
@@ -58,6 +58,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext);
     
     case 'text_input': return await executeTextInput(node, inputs);
+    case 'float_input': return await executeFloatInput(node, inputs);
     case 'prompt_board': return await executePromptBoard(node, inputs, orderContext);
     case 'string_concat': return await executeStringConcat(node, inputs);
     case 'llm_call': return await executeLlmCall(node, inputs, env, pool);
