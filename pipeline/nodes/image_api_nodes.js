@@ -402,8 +402,9 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
 export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
-  const apiKey = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
-  if (!apiKey) throw new Error('GROK_API_KEY is not configured');
+  const globalAk = env.GROK_API_KEY || await getSetting(pool, 'GROK_API_KEY');
+  if (!globalAk) throw new Error('GROK_API_KEY is not configured');
+  const akArr = globalAk.includes(',') ? globalAk.split(',').map(s => s.trim()).filter(Boolean) : [globalAk.trim()];
 
   const resolution = node.data.resolution || '2k';
   const aspectRatio = node.data.aspectRatio || '16:9';
@@ -466,29 +467,58 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
     payload.images = base64Images.slice(0, 3).map(url => ({ type: 'image_url', url }));
   }
 
-  console.log(`[Pipeline] Grok Imagine executing... endpoint: ${endpoint}, mode: ${base64Images.length === 0 ? 'generation' : 'edit'}`);
-  const res = await fetchWithRetry(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify(payload),
-    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000)
-  }, { noRetry: true });
+  let lastError = null;
+  const maxAttempts = 3;
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Grok API Error [${res.status}]: ${errText}`);
-  }
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const apiKey = akArr[Math.floor(Math.random() * akArr.length)];
+    try {
+      console.log(`[Pipeline] Grok Imagine executing (Attempt ${attempt}/${maxAttempts})... endpoint: ${endpoint}, mode: ${base64Images.length === 0 ? 'generation' : 'edit'}`);
+      const res = await fetchWithRetry(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(payload),
+        signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
+      }, { noRetry: true });
 
-  const data = await res.json();
-  const outputImages = [];
-  if (data.data && data.data.length > 0) {
-    for (const item of data.data) {
-      if (item.url) outputImages.push(item.url);
-      else if (item.b64_json) outputImages.push(`data:image/png;base64,${item.b64_json}`);
+      if (!res.ok) {
+        const errText = await res.text();
+        // xAI sometimes returns 400 "Incorrect API key" when rate limits or concurrency limits are exceeded
+        if ((res.status === 400 && errText.includes('Incorrect API key')) || res.status === 429 || res.status >= 500) {
+          if (attempt < maxAttempts) {
+            const delay = (res.status === 429 ? 3000 : 2000) * attempt + Math.floor(Math.random() * 1000);
+            console.warn(`[Pipeline] Grok returned ${res.status} (Possible rate limit). Retrying in ${delay}ms...`);
+            await sleep(delay);
+            continue;
+          }
+        }
+        throw new Error(`Grok API Error [${res.status}]: ${errText}`);
+      }
+
+      const data = await res.json();
+      const outputImages = [];
+      if (data.data && data.data.length > 0) {
+        for (const item of data.data) {
+          if (item.url) outputImages.push(item.url);
+          else if (item.b64_json) outputImages.push(`data:image/png;base64,${item.b64_json}`);
+        }
+      }
+
+      if (outputImages.length === 0) throw new Error('Grok API returned no images');
+      return { output_images: outputImages, output: outputImages, images: outputImages };
+      
+    } catch (err) {
+      lastError = err;
+      if (err.name === 'AbortError' || (err.message && err.message.includes('timeout'))) throw err;
+      if (attempt < maxAttempts) {
+        const delay = 2000 * attempt + Math.floor(Math.random() * 1000);
+        console.warn(`[Pipeline] Grok fetch failed (${err.message}). Retrying in ${delay}ms...`);
+        await sleep(delay);
+        continue;
+      }
     }
   }
 
-  if (outputImages.length === 0) throw new Error('Grok API returned no images');
-  return { output_images: outputImages, output: outputImages, images: outputImages };
+  throw lastError || new Error('Grok API failed after max retries');
 }
 
