@@ -394,6 +394,34 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
           ]
         }
       ]
+    },
+    { 
+      id: 'grok_imagine', 
+      name: 'Grok Imagine', 
+      models: [
+        { 
+          id: 'grok-imagine-image-quality', 
+          name: 'Quality (高质量)',
+          sizes: [
+            { value: '1:1', label: '1:1 (方形)' },
+            { value: '16:9', label: '16:9 (横版)' },
+            { value: '9:16', label: '9:16 (竖版)' },
+            { value: '4:3', label: '4:3 (简报)' },
+            { value: '3:4', label: '3:4 (肖像)' }
+          ]
+        },
+        { 
+          id: 'grok-imagine-image', 
+          name: 'Regular (普通)',
+          sizes: [
+            { value: '1:1', label: '1:1 (方形)' },
+            { value: '16:9', label: '16:9 (横版)' },
+            { value: '9:16', label: '9:16 (竖版)' },
+            { value: '4:3', label: '4:3 (简报)' },
+            { value: '3:4', label: '3:4 (肖像)' }
+          ]
+        }
+      ]
     }
   ];
   return res.json({ msg: 'ok', data: registry });
@@ -416,7 +444,7 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
         model: model,
         prompt: prompt,
         genSize: aspectRatio,
-        resolution: aspectRatio,
+        resolution: nodeType === 'grok_imagine' ? '2k' : aspectRatio,
         aspectRatio: aspectRatio,
         genQuality: quality,
         size: aspectRatio // For Seedream
@@ -535,7 +563,7 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
         model: model,
         prompt: prompt,
         genSize: aspectRatio,
-        resolution: aspectRatio,
+        resolution: nodeType === 'grok_imagine' ? '2k' : aspectRatio,
         aspectRatio: aspectRatio,
         genQuality: quality,
         size: aspectRatio // For Seedream
