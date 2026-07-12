@@ -1,3 +1,5 @@
+import { fetchWithRetry } from '../core/fetch_helper.js';
+
 export async function executeColorGrading(node, inputs) {
   const sharp = (await import('sharp')).default;
 
@@ -22,8 +24,11 @@ export async function executeColorGrading(node, inputs) {
   if (imageUrl.startsWith('data:image')) {
     buffer = Buffer.from(imageUrl.split(',')[1], 'base64');
   } else {
-    const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(30000) });
-    if (!resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl}`);
+    const resp = await fetchWithRetry(imageUrl, { 
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(60000) 
+    });
+    if (!resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl} (Status: ${resp.status})`);
     buffer = Buffer.from(await resp.arrayBuffer());
   }
 
