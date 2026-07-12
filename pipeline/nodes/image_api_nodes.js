@@ -417,6 +417,11 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
       else if (val) images.push(val);
     }
   }
+  if (images.length === 0) {
+    let legacy = inputs.images || inputs.ref_images || inputs.ref_image_1 || [];
+    if (typeof legacy === 'string') legacy = [legacy];
+    images = Array.isArray(legacy) ? legacy.flat().filter(Boolean) : [];
+  }
 
   const base64Images = [];
   if (images.length > 0) {
