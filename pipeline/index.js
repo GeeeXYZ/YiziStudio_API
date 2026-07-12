@@ -295,10 +295,10 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     }
 
     let finalStatus;
-    if (isOssSuccess && !pipelineError) {
+    if (isOssSuccess && !pipelineError && allFailedUploads.length === 0) {
       finalStatus = `${totalNodes}/${totalNodes} 交付成功`;
-    } else if (isOssSuccess && pipelineError) {
-      finalStatus = `${totalNodes}/${totalNodes} 部分完成(已交付)`;
+    } else if (isOssSuccess && (pipelineError || allFailedUploads.length > 0)) {
+      finalStatus = `${totalNodes}/${totalNodes} 部分完成(含失败)`;
     } else {
       finalStatus = `${totalNodes}/${totalNodes} 异常中断`;
     }
