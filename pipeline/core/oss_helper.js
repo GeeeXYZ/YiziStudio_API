@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { fetchWithRetry } from './fetch_helper.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -22,7 +23,8 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       if (!buffer) {
-        const response = await fetch(url, {
+        const response = await fetchWithRetry(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
           signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
