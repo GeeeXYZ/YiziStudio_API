@@ -14,7 +14,7 @@ export async function executeSeedream(node, inputs, env, pool, abortSignal) {
   for (let i = 1; i <= 20; i++) {
     const val = inputs[`image_${i}`];
     if (val !== undefined) {
-      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      if (Array.isArray(val)) images = images.concat(val.flat().filter(Boolean));
       else if (val) images.push(val);
     }
   }
@@ -61,7 +61,7 @@ export async function executeSeedream(node, inputs, env, pool, abortSignal) {
           try {
             const sharp = (await import('sharp')).default;
             buffer = await sharp(buffer)
-              .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
+              .resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true })
               .jpeg({ quality: 95 })
               .toBuffer();
           } catch (sharpErr) {
@@ -413,7 +413,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   for (let i = 1; i <= 3; i++) {
     const val = inputs[`image_${i}`];
     if (val !== undefined) {
-      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      if (Array.isArray(val)) images = images.concat(val.flat().filter(Boolean));
       else if (val) images.push(val);
     }
   }

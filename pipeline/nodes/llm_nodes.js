@@ -24,7 +24,7 @@ export async function executeStringConcat(node, inputs) {
   return { output: [s1, s2, s3, s4, s5, s6].filter(s => typeof s === 'string' && s.trim() !== '').join('\n') };
 }
 
-export async function executeLlmCall(node, inputs, env, pool) {
+export async function executeLlmCall(node, inputs, env, pool, abortSignal) {
   const { getSetting } = await import('../../config_manager.js');
   
   const useGlobal = node.data.use_global_config === true;
@@ -49,7 +49,7 @@ export async function executeLlmCall(node, inputs, env, pool) {
   for (let i = 1; i <= 20; i++) {
     const val = inputs[`image_${i}`];
     if (val !== undefined) {
-      if (Array.isArray(val)) images.push(...val.flat().filter(Boolean));
+      if (Array.isArray(val)) images = images.concat(val.flat().filter(Boolean));
       else if (val) images.push(val);
     }
   }
@@ -97,7 +97,7 @@ export async function executeLlmCall(node, inputs, env, pool) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
       body: JSON.stringify({ model: llmModel, input: inputMessages }),
-      signal: AbortSignal.timeout(120000)
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
     });
 
     if (!chatRes.ok) throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
@@ -137,7 +137,7 @@ export async function executeLlmCall(node, inputs, env, pool) {
           contentParts.push({ type: 'image_url', image_url: { url } });
         } else {
           try {
-            const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            const resp = await fetch(url, { signal: AbortSignal.any([abortSignal, AbortSignal.timeout(30000)].filter(Boolean)) });
             if (!resp.ok) { console.warn(`[LLM Vision] Failed to fetch image: ${url.substring(0, 80)}`); continue; }
             const arrayBuffer = await resp.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
@@ -164,7 +164,7 @@ export async function executeLlmCall(node, inputs, env, pool) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
       body: JSON.stringify({ model: llmModel, messages }),
-      signal: AbortSignal.timeout(120000)
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
     });
 
     if (!chatRes.ok) throw new Error(`LLM Call failed: [${chatRes.status}] ${await chatRes.text()}`);
@@ -205,7 +205,7 @@ export async function executePromptLibrary(node, inputs, pool, executionState) {
       if (executionState.usedPromptIds.length > 0) {
         const placeholders = executionState.usedPromptIds.map((_, i) => `$${i + 2}`).join(',');
         query += ` AND id NOT IN (${placeholders})`;
-        params.push(...executionState.usedPromptIds);
+        params = params.concat(executionState.usedPromptIds);
       }
       
       query += ' ORDER BY RANDOM() LIMIT 1';

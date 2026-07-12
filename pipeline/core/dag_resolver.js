@@ -69,7 +69,7 @@ export function resolveInputs(incomingEdges, context) {
         // Before: push(['url1']) → [['url1'], ['url2']] (nested, downstream filters silently drop)
         // After:  push(...['url1']) → ['url1', 'url2'] (flat, all images preserved)
         if (Array.isArray(val)) {
-          inputs[edge.targetHandle].push(...val);
+          inputs[edge.targetHandle] = inputs[edge.targetHandle].concat(val);
         } else {
           inputs[edge.targetHandle].push(val);
         }

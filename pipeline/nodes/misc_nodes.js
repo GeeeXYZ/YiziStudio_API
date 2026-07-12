@@ -6,7 +6,7 @@ export async function executeTextPreview(node, inputs) {
   return { output: inputs.text || inputs.output || node.data.preview_text || '' };
 }
 
-export async function executeHttpRequest(node, inputs) {
+export async function executeHttpRequest(node, inputs, abortSignal) {
   const method = node.data.method || 'GET';
   const reqUrl = inputs.url || node.data.url;
   if (!reqUrl) throw new Error('HTTP Request Node missing URL');
@@ -18,7 +18,7 @@ export async function executeHttpRequest(node, inputs) {
   }
 
   console.log(`[Pipeline] HTTP ${method} to ${reqUrl}`);
-  options.signal = AbortSignal.timeout(60000); // Prevent pipeline queue hanging
+  options.signal = abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000); // Prevent pipeline queue hanging
   const httpRes = await fetch(reqUrl, options);
   const httpData = await httpRes.json();
   return { response: httpData };
