@@ -232,12 +232,23 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     }
 
     let finalOssImages = [];
+    let autoDeliveredImages = [];
     let rawGeneratedImages = [];
     let isOssSuccess = false;
 
     for (const out of Object.values(context)) {
-      if (out && out.uploaded_urls && Array.isArray(out.uploaded_urls)) finalOssImages.push(...out.uploaded_urls);
-      if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) finalOssImages.push(...out.final_image_urls);
+      if (out && out.uploaded_urls && Array.isArray(out.uploaded_urls)) {
+        finalOssImages.push(...out.uploaded_urls);
+        let shouldDeliver = out.auto_delivery === true;
+        if (orderContext.auto_delivery === true) shouldDeliver = true;
+        if (shouldDeliver) autoDeliveredImages.push(...out.uploaded_urls);
+      }
+      if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) {
+        finalOssImages.push(...out.final_image_urls);
+        let shouldDeliver = out.auto_delivery === true;
+        if (orderContext.auto_delivery === true) shouldDeliver = true;
+        if (shouldDeliver) autoDeliveredImages.push(...out.final_image_urls);
+      }
       if (out && out.output && Array.isArray(out.output)) rawGeneratedImages.push(...out.output.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
       if (out && out.output_images && Array.isArray(out.output_images)) rawGeneratedImages.push(...out.output_images.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
     }
@@ -267,7 +278,10 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                
                if (fbSucceeded.length > 0) {
                  imagesToSave = fbSucceeded;
-                 finalOssImages = fbSucceeded;
+                 finalOssImages.push(...fbSucceeded);
+                 if (orderContext.auto_delivery === true) {
+                     autoDeliveredImages.push(...fbSucceeded);
+                 }
                  isOssSuccess = true;
                }
            }
@@ -330,15 +344,16 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                }
 
                if (finalOssImages.length > 0) {
-                    // Only push to delivery pool and flip wait_delivery if auto_delivery is enabled
-                    console.log(`[Pipeline] AUTO_DELIVERY CHECK: orderContext.auto_delivery = ${JSON.stringify(orderContext.auto_delivery)} (type: ${typeof orderContext.auto_delivery}) | order_id=${orderContext.order_id}`);
-                    if (orderContext.auto_delivery) {
+                   console.log(`[Pipeline] Final OSS Images: ${finalOssImages.length}, Auto Delivered: ${autoDeliveredImages.length}`);
+               }
+
+               if (autoDeliveredImages.length > 0) {
+                     console.log(`[Pipeline] AUTO_DELIVERY ON: Writing ${autoDeliveredImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
                      if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
-                     for (const imgUrl of finalOssImages) {
+                     for (const imgUrl of autoDeliveredImages) {
                        orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
                      }
                      orderData.sets[setIndex].is_auto_delivered = true;
-                     console.log(`[Pipeline] Auto-delivery ON: Writing ${finalOssImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
                      
                      // BUG FIX: Only set wait_delivery='0' when ALL sets have delivery images,
                      // not just the current one. This prevents premature delivery notification
@@ -354,12 +369,11 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
 
                      if (orderEventEmitter) {
                        try {
-                         orderEventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: finalOssImages.length, setIndex, deliveredSets, totalSets });
+                         orderEventEmitter.emit(`orderUpdate:${orderContext.openid}`, { orderId: orderContext.order_id, event: 'AUTO_DELIVERY', deliveryCount: autoDeliveredImages.length, setIndex, deliveredSets, totalSets });
                        } catch (sseErr) {}
                      }
-                   } else {
-                     console.log(`[Pipeline] Auto-delivery OFF: ${finalOssImages.length} images uploaded to OSS but NOT pushed to delivery pool for order ${orderContext.order_id}`);
-                   }
+                 } else if (finalOssImages.length > 0) {
+                     console.log(`[Pipeline] Auto-delivery OFF: ${finalOssImages.length} images uploaded to OSS Gallery but NOT pushed to delivery pool for order ${orderContext.order_id}`);
                  }
 
                 await pgClient.query('UPDATE "yizi_orders" SET data = $1, wait_delivery = $2 WHERE id = $3', [JSON.stringify(orderData), nextWaitDelivery, orderContext.order_id]);

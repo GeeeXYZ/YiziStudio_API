@@ -80,6 +80,7 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   console.log(`[Pipeline] OSS Upload Summary: ${uploadedUrls.length} succeeded, ${failedUploads.length} failed out of ${filteredImages.length} total.`);
   return {
     uploaded_urls: uploadedUrls,
-    failed_uploads: failedUploads
+    failed_uploads: failedUploads,
+    auto_delivery: node.data.auto_delivery === true
   };
 }

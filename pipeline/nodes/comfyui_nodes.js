@@ -65,11 +65,12 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool) 
         const promptOverride = inputs.prompt_override;
         comfyNode.inputs.prompt = (typeof promptOverride === 'string' && promptOverride.trim()) ? promptOverride : (orderContext.prompt || '');
         // Propagate node-level auto_delivery into orderContext for backend delivery decision
-        // (decoupled from ComfyUI — ComfyUI always calls back, backend decides whether to push to delivery pool)
-        if (node.data.auto_delivery === true) {
-          orderContext.auto_delivery = true;
-        }
-        comfyNode.inputs.auto_delivery = true; // Always tell ComfyUI to callback with results
+        const nodeAutoDelivery = node.data.auto_delivery === true;
+        const finalAutoDelivery = orderContext.auto_delivery === true || nodeAutoDelivery;
+        
+        // Decoupled from global auto_delivery: track specifically for comfyui webhook
+        orderContext.comfy_auto_delivery = finalAutoDelivery;
+        comfyNode.inputs.auto_delivery = finalAutoDelivery; // Tell ComfyUI to callback with results if true
         comfyNode.inputs.api_url = apiUrl; 
         comfyNode.inputs.token = pipelineToken;
         comfyNode.inputs.oss_address = directOssAddress;

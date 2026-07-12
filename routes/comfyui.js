@@ -109,8 +109,12 @@ router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
           // If there's a pipeline log, check if auto_delivery was explicitly set in orderContext
           // The pipeline stores auto_delivery state — if the pipeline ran without auto_delivery, don't push
           const logData = logRes.rows[0].result_images;
-          if (logData && typeof logData === 'object' && logData.auto_delivery === false) {
-            autoDelivery = false;
+          if (logData && typeof logData === 'object') {
+            if (logData.comfy_auto_delivery !== undefined) {
+              if (logData.comfy_auto_delivery === false) autoDelivery = false;
+            } else if (logData.auto_delivery === false) {
+              autoDelivery = false;
+            }
           }
         }
       } catch (logErr) {
