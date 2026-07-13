@@ -332,7 +332,7 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
             }
          }
          
-         const secureUrl = await uploadToOSS(ossClient, uploadPayload, orderInfo.openid, orderInfo.id, 0, `del_${Date.now()}`);
+         const secureUrl = await uploadToOSS(ossClient, uploadPayload, orderInfo.openid, orderInfo.id, 0, `${Date.now()}_del`);
          uploadedUrls.push(secureUrl.replace('http://', 'https://'));
          
          // Optionally delete local temp file after success
@@ -355,7 +355,7 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
        
        for (const url of uploadedUrls) {
          orderData.sets[setIdx].delivery_imgs.push({
-           id: `del_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+           id: `${Date.now()}_del_${Math.random().toString(36).substring(2,7)}`,
            img: url,
            confirmed_at: null
          });

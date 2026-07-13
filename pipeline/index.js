@@ -320,7 +320,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                const ossClient = new OSS(ossConfig);
                const fbPromises = missingImages.map(async (imgUrl, i) => {
                   try {
-                    const url = await uploadToOSS(ossClient, imgUrl, orderContext.openid || 'unknown', orderContext.order_id || 'fallback', orderContext.set_index || 0, `fb_${Date.now()}_${i}`);
+                    const url = await uploadToOSS(ossClient, imgUrl, orderContext.openid || 'unknown', orderContext.order_id || 'fallback', orderContext.set_index || 0, `${Date.now()}_fb_${i}`);
                     return { success: true, url: url.replace('http://', 'https://') };
                   } catch (e) {
                     return { success: false, index: i, sourceUrl: imgUrl?.substring(0, 200), error: e.message };
@@ -410,7 +410,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
                      console.log(`[Pipeline] AUTO_DELIVERY ON: Writing ${autoDeliveredImages.length} images to delivery pool for order ${orderContext.order_id} set ${setIndex}`);
                      if (!orderData.sets[setIndex].delivery_imgs) orderData.sets[setIndex].delivery_imgs = [];
                      for (const imgUrl of autoDeliveredImages) {
-                       orderData.sets[setIndex].delivery_imgs.push({ id: `del_${Date.now()}_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
+                       orderData.sets[setIndex].delivery_imgs.push({ id: `${Date.now()}_del_${Math.random().toString(36).substr(2,4)}`, img: imgUrl });
                      }
                      orderData.sets[setIndex].is_auto_delivered = true;
                      

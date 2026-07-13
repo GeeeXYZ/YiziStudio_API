@@ -75,7 +75,7 @@ router.post('/toolkit/upload_to_oss_direct', authenticateToken, async (req, res)
 
     for (const img of urls) {
        try {
-         const secureUrl = await uploadToOSS(ossClient, img, openid, order_id, setIdx, `del_${Date.now()}`);
+         const secureUrl = await uploadToOSS(ossClient, img, openid, order_id, setIdx, `${Date.now()}_del`);
          uploadedUrls.push(secureUrl.replace('http://', 'https://'));
        } catch (err) {
          console.error('Direct OSS upload failed for', img, err.message);

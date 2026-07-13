@@ -127,7 +127,7 @@ router.post('/comfyui/order/deliver', authenticateToken, async (req, res) => {
           orderData.sets[setIndex].delivery_imgs = [];
         }
         for (const imgUrl of images) {
-          const id = `del_comfy_${Date.now()}_${Math.random().toString(36).substr(2,4)}`;
+          const id = `${Date.now()}_comfy_${Math.random().toString(36).substr(2,4)}`;
           newDeliveryIds.push(id);
           orderData.sets[setIndex].delivery_imgs.push({ id, img: imgUrl });
         }
