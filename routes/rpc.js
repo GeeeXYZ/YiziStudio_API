@@ -500,6 +500,27 @@ const rpcHandler = async (req, res) => {
         }
       }
 
+      // Custom enrich for recharge orders: append user phone and remark
+      if (db_name === 'yizi_recharge_orders' && listData.length > 0) {
+        const uids = [...new Set(listData.map(r => r.user_id).filter(Boolean))];
+        if (uids.length > 0) {
+          const ph = uids.map((_, i) => `$${i + 1}`).join(', ');
+          const usersRes = await pool.query(
+            `SELECT "_id", "phone_number", "remark" FROM "yizi_users" WHERE "_id" IN (${ph})`,
+            uids
+          );
+          const userMap = {};
+          usersRes.rows.forEach(u => {
+            userMap[u._id] = { phone: u.phone_number, remark: u.remark };
+          });
+          listData = listData.map(r => ({
+            ...r,
+            user_phone: userMap[r.user_id]?.phone || '',
+            user_remark: userMap[r.user_id]?.remark || ''
+          }));
+        }
+      }
+
       return res.json({
         msg: 'ok',
         result: {
