@@ -1,0 +1,89 @@
+import { pool } from '../config/db.js';
+
+/**
+ * Perform billing calculation and deduction for a completed pipeline execution.
+ * @param {Object} executionLedgers - Map of ledger entries: { "nodeType::modelId": { node_type, model, count } }
+ * @param {Object} contextInfo - { task_id, run_by_admin_id, run_by_user_id }
+ */
+export async function finalizePipelineBilling(executionLedgers, contextInfo) {
+  const ledgerValues = Object.values(executionLedgers);
+  if (ledgerValues.length === 0) return; // No nodes were executed
+
+  try {
+    // 1. Fetch current pricing for the executed nodes
+    const { rows: pricingRows } = await pool.query(`SELECT node_type, model, cost FROM yizi_node_costs`);
+    
+    // Convert to quick lookup map
+    const pricingMap = {};
+    for (const row of pricingRows) {
+      pricingMap[`${row.node_type}::${row.model}`] = row;
+    }
+
+    let totalCost = 0;
+    const finalDetails = [];
+
+    // 2. Calculate totals
+    for (const entry of ledgerValues) {
+      // Try precise match first, then fallback to wildcard '*' model pricing
+      let price = pricingMap[`${entry.node_type}::${entry.model}`] || pricingMap[`${entry.node_type}::*`];
+      
+      const costPerRun = price ? parseFloat(price.cost) : 0;
+      const totalNodeCost = costPerRun * entry.count;
+
+      totalCost += totalNodeCost;
+
+      finalDetails.push({
+        node_type: entry.node_type,
+        model: entry.model,
+        count: entry.count,
+        cost_per_run: costPerRun,
+        total_cost: totalNodeCost
+      });
+    }
+
+    // 3. Begin Transaction to deduct and record
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Deduct from Admin if applicable
+      if (contextInfo.run_by_admin_id && totalCost > 0) {
+        await client.query(
+          `UPDATE yizi_admins SET balance = balance - $1 WHERE id = $2`,
+          [totalCost, contextInfo.run_by_admin_id]
+        );
+      }
+
+      // Deduct from Frontend User if applicable
+      if (contextInfo.run_by_user_id && totalCost > 0) {
+        await client.query(
+          `UPDATE yizi_users SET points = points - $1 WHERE user_id = $2 OR _id = $2`,
+          [totalCost, contextInfo.run_by_user_id]
+        );
+      }
+
+      // Record Ledger
+      await client.query(
+        `INSERT INTO yizi_execution_ledgers (task_id, run_by_admin_id, run_by_user_id, total_cost, node_execution_details)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          contextInfo.task_id,
+          contextInfo.run_by_admin_id || null,
+          contextInfo.run_by_user_id || null,
+          totalCost,
+          JSON.stringify(finalDetails)
+        ]
+      );
+
+      await client.query('COMMIT');
+      console.log(`[Billing] Task ${contextInfo.task_id}: Deducted ${totalCost}`);
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error(`[Billing] Failed to process billing for task ${contextInfo.task_id}:`, err);
+  }
+}

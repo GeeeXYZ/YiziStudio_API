@@ -36,6 +36,35 @@ pool.query(`
     ALTER TABLE "yizi_model" RENAME COLUMN "id" TO "uuid";
 `).catch(() => {});
 
+// Add balance to yizi_admins for dual-track cost accounting
+pool.query(`
+    ALTER TABLE "yizi_admins" ADD COLUMN IF NOT EXISTS "balance" NUMERIC(15, 4) DEFAULT 0;
+`).catch(() => {});
+
+// Initialize cost tracking tables
+pool.query(`
+  CREATE TABLE IF NOT EXISTS yizi_node_costs (
+      id SERIAL PRIMARY KEY,
+      node_type VARCHAR(50) NOT NULL,
+      model VARCHAR(100) DEFAULT '*',
+      cost NUMERIC(10, 4) DEFAULT 0,
+      currency VARCHAR(20) DEFAULT 'points',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(node_type, model)
+  );
+
+  CREATE TABLE IF NOT EXISTS yizi_execution_ledgers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id VARCHAR(100),
+      run_by_admin_id INT,
+      run_by_user_id VARCHAR,
+      total_cost NUMERIC(10, 4) DEFAULT 0,
+      node_execution_details JSONB NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`).catch(e => console.error('DB Init Error Cost Tables:', e.message));
+
 // Cache for table columns to avoid repetitive schema queries
 const tableColumnsCache = {};
 

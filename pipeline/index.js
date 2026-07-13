@@ -9,6 +9,7 @@ import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { executeColorGrading } from './nodes/color_grading_node.js';
 import { uploadToOSS } from './core/oss_helper.js';
+import { finalizePipelineBilling } from '../services/billingService.js';
 
 // Re-export for compatibility with other files (e.g. routes/toolkit.js)
 export { uploadToOSS };
@@ -81,6 +82,9 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
 export async function _runPipelineInternal(workflowJson, orderContext, pool, options = {}) {
   const { simulate = false } = options;
   const pipelineLogId = `pipeline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  
+  // Ledger for billing
+  const executionLedger = {};
   const traceLogs = [];
 
   try {
@@ -186,6 +190,14 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           traceLog.outputs = outputs;
           traceLog.duration = Date.now() - traceLog.startTime;
           traceLogs.push(traceLog);
+
+          // Track for billing
+          const modelId = node.data?.modelId || node.data?.model || '*';
+          const ledgerKey = `${node.type}::${modelId}`;
+          if (!executionLedger[ledgerKey]) {
+            executionLedger[ledgerKey] = { node_type: node.type, model: modelId, count: 0 };
+          }
+          executionLedger[ledgerKey].count += 1;
           
           if (pool && !simulate && completedNodes <= totalNodes) {
              const friendlyName = nodeNames[node.type] || '执行节点处理';
@@ -449,6 +461,15 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     if (pipelineError) {
       console.warn(`[Pipeline] Partial failure: ${failures.length} node(s) failed, but ${imagesToSave.length} images were saved successfully.`);
       return { success: true, partial: true, images: imagesToSave, failed_uploads: allFailedUploads, error: pipelineError.message, traceLogs };
+    }
+
+    if (!simulate && pool) {
+      // Execute billing
+      await finalizePipelineBilling(executionLedger, {
+        task_id: pipelineLogId,
+        run_by_admin_id: orderContext.run_by_admin_id,
+        run_by_user_id: orderContext.user_id
+      });
     }
 
     return { success: true, images: imagesToSave, failed_uploads: allFailedUploads, traceLogs };

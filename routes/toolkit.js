@@ -3,6 +3,7 @@ import OSS from 'ali-oss';
 import { pool } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { checkPermission } from '../middleware/rbac.js';
+import { finalizePipelineBilling } from '../services/billingService.js';
 
 const router = express.Router();
 
@@ -473,6 +474,12 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
     
     const outputs = await runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null);
     
+    // Process billing
+    await finalizePipelineBilling(
+      { [`${virtualNode.type}::${virtualNode.data.modelId}`]: { node_type: virtualNode.type, model: virtualNode.data.modelId, count: 1 } },
+      { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: req.user?.id }
+    );
+    
     if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
       let urls = outputs.output_images || outputs.output || outputs.images;
       if (!Array.isArray(urls)) urls = [urls];
@@ -592,7 +599,13 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
     
     // Fire and forget (No await here)
     runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null)
-      .then(outputs => {
+      .then(async outputs => {
+        // Process billing
+        await finalizePipelineBilling(
+          { [`${virtualNode.type}::${virtualNode.data.modelId}`]: { node_type: virtualNode.type, model: virtualNode.data.modelId, count: 1 } },
+          { task_id: `toolkit_async_${taskId}`, run_by_admin_id: req.user?.id }
+        );
+
         if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
           let urls = outputs.output_images || outputs.output || outputs.images;
           if (!Array.isArray(urls)) urls = [urls];
