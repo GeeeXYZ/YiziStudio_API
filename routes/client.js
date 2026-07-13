@@ -382,6 +382,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
               const orderContext = {
                 isRealOrder: true,
                 openid: unionid,
+                user_id: unionid,
                 order_id: orderId,
                 set_index: index,
                 sku_pose_folder: resolvedPoseFolder,

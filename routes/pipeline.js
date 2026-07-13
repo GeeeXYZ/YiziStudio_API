@@ -83,6 +83,11 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
 router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
   let { workflow_json, mock_order } = req.body;
   
+  mock_order = mock_order || {};
+  if (req.user && req.user.id) {
+    mock_order.run_by_admin_id = req.user.id;
+  }
+  
   if (!workflow_json && mock_order?.order_id) {
     try {
       // Lookup the order's planId (SKU) to find the default workflow and populate order context
@@ -93,6 +98,7 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
         
         // Populate missing order details into mock_order
         mock_order.openid = mock_order.openid || row.openid;
+        mock_order.user_id = mock_order.openid;
         mock_order.model_uuid = mock_order.model_uuid || orderData.model_uuid;
         mock_order.model_name = mock_order.model_name || orderData.model_name;
         mock_order.prompt = mock_order.prompt || orderData.prompt;
