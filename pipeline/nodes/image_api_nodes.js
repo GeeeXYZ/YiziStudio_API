@@ -6,6 +6,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function executeSeedream(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
   const globalEndpointId = env.VOLCENGINE_ENDPOINT_ID || await getSetting(pool, 'VOLCENGINE_ENDPOINT_ID');
   const endpointId = node.data.endpoint_id || node.data.endpointId || globalEndpointId || 'ep-xxxx';
   const sizePreset = node.data.size || '2k (Origin)';
@@ -113,6 +114,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
 
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
   const aspectRatio = node.data.aspectRatio || '';
   const imageResolution = node.data.imageResolution || '';
@@ -222,7 +224,8 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   } else if (typeof prompt === 'object') {
     prompt = JSON.stringify(prompt);
   }
-  prompt = String(prompt);
+  prompt = String(prompt).trim();
+  if (!prompt) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'gpt-image-2-vip';
   const size = node.data.imageResolution || 'auto';
 
@@ -321,6 +324,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
 
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
   
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
@@ -402,6 +406,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
 export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
 
   // ── API Key Resolution with diagnostics ──
   const envAk = env.GROK_API_KEY;
