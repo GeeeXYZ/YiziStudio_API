@@ -509,7 +509,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(payload),
-        signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
+        signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000)
       }, { noRetry: true });
 
       if (!res.ok) {
