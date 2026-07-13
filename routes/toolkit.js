@@ -463,7 +463,7 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
 
 // POST /toolkit/vision_api/execute
 router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) => {
-  const { nodeType, model, prompt, images, aspectRatio, quality } = req.body;
+  const { nodeType, model, prompt, images, aspectRatio, quality, orderId } = req.body;
   if (!nodeType) return res.json({ msg: 'err', info: 'Missing nodeType' });
 
   try {
@@ -507,10 +507,23 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
       }
     }
 
+    let runByUserId = null;
+    if (orderId) {
+      try {
+        const orderRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [orderId]);
+        if (orderRes.rows.length > 0 && orderRes.rows[0].openid) {
+          const userRes = await pool.query('SELECT _id FROM "yizi_users" WHERE openid = $1', [orderRes.rows[0].openid]);
+          if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id;
+        }
+      } catch (e) {
+        console.error('[Toolkit] Failed to reverse lookup user_id:', e.message);
+      }
+    }
+
     // Process billing
     await finalizePipelineBilling(
       { [virtualNode.type]: { node_type: virtualNode.type, count: 1 } },
-      { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: runByAdminId }
+      { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: runByAdminId, run_by_user_id: runByUserId }
     );
     
     if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
@@ -595,7 +608,7 @@ export default router;
 
 // POST /toolkit/vision_api/execute_async
 router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, res) => {
-  const { nodeType, model, prompt, images, aspectRatio, quality } = req.body;
+  const { nodeType, model, prompt, images, aspectRatio, quality, orderId } = req.body;
   if (!nodeType) return res.json({ msg: 'err', info: 'Missing nodeType' });
 
   const taskId = 'task_' + Date.now() + Math.random().toString(36).substring(2, 7);
@@ -643,10 +656,23 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
           }
         }
 
+        let runByUserId = null;
+        if (orderId) {
+          try {
+            const orderRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [orderId]);
+            if (orderRes.rows.length > 0 && orderRes.rows[0].openid) {
+              const userRes = await pool.query('SELECT _id FROM "yizi_users" WHERE openid = $1', [orderRes.rows[0].openid]);
+              if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id;
+            }
+          } catch (e) {
+            console.error('[Toolkit] Failed to reverse lookup user_id:', e.message);
+          }
+        }
+
         // Process billing
         await finalizePipelineBilling(
           { [virtualNode.type]: { node_type: virtualNode.type, count: 1 } },
-          { task_id: `toolkit_async_${taskId}`, run_by_admin_id: runByAdminId }
+          { task_id: `toolkit_async_${taskId}`, run_by_admin_id: runByAdminId, run_by_user_id: runByUserId }
         );
 
         if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
