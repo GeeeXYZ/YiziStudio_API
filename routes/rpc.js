@@ -54,14 +54,14 @@ const rpcHandler = async (req, res) => {
           planTitle: "Admin Manual Top-up",
           type: "topup",
           remark: remark,
-          operator: req.user.account,
+          operator: req.user.email,
           actual_payment: paymentAmount
       };
 
       await pool.query('UPDATE "yizi_users" SET "points" = $1 WHERE "_id" = $2', [newPoints.toString(), user._id]);
       await pool.query(
           'INSERT INTO "yizi_recharge_orders" (id, user_id, amount, operator, remark, datetime, data) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-          [orderId, user._id, numAmount, req.user.account, remark, new Date().toISOString(), JSON.stringify(orderData)]
+          [orderId, user._id, numAmount, req.user.email, remark, new Date().toISOString(), JSON.stringify(orderData)]
       );
 
       return res.json({ msg: 'ok', info: `成功为用户操作 ${numAmount} coz` });
