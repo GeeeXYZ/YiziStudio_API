@@ -239,54 +239,98 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     let autoDeliveredImages = [];
     let rawGeneratedImages = [];
     let isOssSuccess = false;
+    let allFailedUploads = [];
 
-    for (const out of Object.values(context)) {
-      if (out && out.uploaded_urls && Array.isArray(out.uploaded_urls)) {
+    const isImageUrl = u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'));
+
+    for (const [nodeId, out] of Object.entries(context)) {
+      if (!out) continue;
+      // Collect successfully uploaded OSS URLs from OssOutput nodes
+      if (out.uploaded_urls && Array.isArray(out.uploaded_urls)) {
         finalOssImages.push(...out.uploaded_urls);
         let shouldDeliver = out.auto_delivery === true;
         if (orderContext.auto_delivery === true) shouldDeliver = true;
         if (shouldDeliver) autoDeliveredImages.push(...out.uploaded_urls);
+        console.log(`[Pipeline] Node ${nodeId}: ${out.uploaded_urls.length} images uploaded to OSS`);
       }
-      if (out && out.final_image_urls && Array.isArray(out.final_image_urls)) {
+      // BUG FIX: Collect failed_uploads from OssOutput nodes — previously these were silently ignored,
+      // causing the pipeline to report "交付成功" even when some images failed to upload.
+      if (out.failed_uploads && Array.isArray(out.failed_uploads) && out.failed_uploads.length > 0) {
+        allFailedUploads.push(...out.failed_uploads);
+        console.error(`[Pipeline] Node ${nodeId}: ${out.failed_uploads.length} images FAILED to upload:`, out.failed_uploads.map(f => f.error || f.sourceUrl?.substring(0, 80)));
+      }
+      if (out.final_image_urls && Array.isArray(out.final_image_urls)) {
         finalOssImages.push(...out.final_image_urls);
         let shouldDeliver = out.auto_delivery === true;
         if (orderContext.auto_delivery === true) shouldDeliver = true;
         if (shouldDeliver) autoDeliveredImages.push(...out.final_image_urls);
       }
-      if (out && out.output && Array.isArray(out.output)) rawGeneratedImages.push(...out.output.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
-      if (out && out.output_images && Array.isArray(out.output_images)) rawGeneratedImages.push(...out.output_images.flat(Infinity).filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image'))));
+      // Collect raw generated images for fallback upload.
+      // Handles both array outputs (e.g. Grok: {output: ['url1']}) and
+      // string outputs (e.g. ColorGrading: {output: 'data:image/jpeg;base64,...'}).
+      if (out.output) {
+        if (Array.isArray(out.output)) {
+          rawGeneratedImages.push(...out.output.flat(Infinity).filter(isImageUrl));
+        } else if (isImageUrl(out.output)) {
+          rawGeneratedImages.push(out.output);
+        }
+      }
+      if (out.output_images) {
+        if (Array.isArray(out.output_images)) {
+          rawGeneratedImages.push(...out.output_images.flat(Infinity).filter(isImageUrl));
+        } else if (isImageUrl(out.output_images)) {
+          rawGeneratedImages.push(out.output_images);
+        }
+      }
     }
+    console.log(`[Pipeline] Post-exec summary: ${finalOssImages.length} OSS images, ${rawGeneratedImages.length} raw images, ${allFailedUploads.length} failed uploads`);
     
     isOssSuccess = finalOssImages.length > 0;
     let imagesToSave = isOssSuccess ? finalOssImages : [];
-    let allFailedUploads = [];
     
-    if (!isOssSuccess && rawGeneratedImages.length > 0) {
-       console.log(`[Pipeline] No OSS images found. Attempting fallback upload for ${rawGeneratedImages.length} raw images.`);
+    // Determine images that were generated but NOT yet uploaded to OSS.
+    // This covers two scenarios:
+    // 1. No OssOutput node exists → all rawGeneratedImages are missing
+    // 2. OssOutput partially failed → some images are in finalOssImages, some aren't
+    const alreadyUploadedSet = new Set(finalOssImages.map(u => u.replace(/^https?:\/\/[^/]+\//, '')));
+    const missingImages = rawGeneratedImages.filter(imgUrl => {
+      if (imgUrl.startsWith('data:image')) return !finalOssImages.includes(imgUrl);
+      const path = imgUrl.replace(/^https?:\/\/[^/]+\//, '');
+      return !alreadyUploadedSet.has(path);
+    });
+
+    if (missingImages.length > 0) {
+       console.log(`[Pipeline] ${missingImages.length} generated images not yet in OSS (${finalOssImages.length} already uploaded). Attempting fallback upload...`);
        try {
            const ossConfig = { region: process.env.OSS_REGION, accessKeyId: process.env.OSS_ACCESS_KEY_ID, accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET, bucket: process.env.OSS_BUCKET, secure: true, timeout: 300000 };
+           if (env.OSS_ENDPOINT) ossConfig.endpoint = env.OSS_ENDPOINT;
            if (ossConfig.accessKeyId) {
                const OSS = (await import('ali-oss')).default;
                const ossClient = new OSS(ossConfig);
-               const fbPromises = rawGeneratedImages.map(async (imgUrl, i) => {
+               const fbPromises = missingImages.map(async (imgUrl, i) => {
                   try {
                     const url = await uploadToOSS(ossClient, imgUrl, orderContext.openid || 'unknown', orderContext.order_id || 'fallback', orderContext.set_index || 0, `fb_${Date.now()}_${i}`);
                     return { success: true, url: url.replace('http://', 'https://') };
                   } catch (e) {
-                    return { success: false, index: i, sourceUrl: imgUrl, error: e.message };
+                    return { success: false, index: i, sourceUrl: imgUrl?.substring(0, 200), error: e.message };
                   }
                });
                const fbResults = await Promise.all(fbPromises);
                const fbSucceeded = fbResults.filter(r => r.success).map(r => r.url);
-               allFailedUploads = fbResults.filter(r => !r.success);
+               const fbFailed = fbResults.filter(r => !r.success);
+               allFailedUploads.push(...fbFailed);
                
                if (fbSucceeded.length > 0) {
-                 imagesToSave = fbSucceeded;
                  finalOssImages.push(...fbSucceeded);
+                 imagesToSave = finalOssImages;
                  if (orderContext.auto_delivery === true) {
                      autoDeliveredImages.push(...fbSucceeded);
                  }
                  isOssSuccess = true;
+                 console.log(`[Pipeline] Fallback recovered ${fbSucceeded.length} images. Total OSS: ${finalOssImages.length}`);
+               }
+               if (fbFailed.length > 0) {
+                 console.error(`[Pipeline] Fallback failed for ${fbFailed.length} images:`, fbFailed.map(f => f.error));
                }
            }
        } catch (e) {

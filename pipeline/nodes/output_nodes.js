@@ -10,9 +10,12 @@ export async function executeOssOutput(node, inputs, orderContext, env) {
   const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
   const orderInfo = inputs.order_info || orderContext;
   
-  console.log(`[Pipeline] OSS Output: Received ${filteredImages.length} images from inputs keys: ${Object.keys(inputs).join(', ')}`);
-  console.log(`[Pipeline] OSS Output: orderInfo =`, orderInfo, `orderContext =`, orderContext);
-  console.log(`[Pipeline] OSS Output: inputs.order_info type =`, typeof inputs.order_info, `isArray =`, Array.isArray(inputs.order_info));
+  console.log(`[Pipeline] OSS Output: Received inputs keys: [${Object.keys(inputs).join(', ')}]`);
+  console.log(`[Pipeline] OSS Output: inputs.images type=${typeof inputs.images}, isArray=${Array.isArray(inputs.images)}, length=${Array.isArray(inputs.images) ? inputs.images.length : 'N/A'}`);
+  console.log(`[Pipeline] OSS Output: ${filteredImages.length} valid images to upload (from ${imagesToUpload.length} total, ${imagesToUpload.length - filteredImages.length} filtered out)`);
+  if (filteredImages.length > 0) {
+    filteredImages.forEach((u, i) => console.log(`[Pipeline] OSS Output:   [${i}] ${u.substring(0, 120)}${u.length > 120 ? '...' : ''}`));
+  }
   
   if (!filteredImages.length) {
      const debugInfo = `inputs.images=${JSON.stringify(inputs.images)}, inputs.output_images=${JSON.stringify(inputs.output_images)}, inputs.output=${JSON.stringify(inputs.output)?.substring(0,200)}`;
