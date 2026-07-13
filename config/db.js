@@ -48,7 +48,7 @@ pool.query(`
       node_type VARCHAR(50) NOT NULL,
       model VARCHAR(100) DEFAULT '*',
       cost NUMERIC(10, 4) DEFAULT 0,
-      currency VARCHAR(20) DEFAULT 'points',
+      currency VARCHAR(20) DEFAULT 'CNY',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(node_type, model)
