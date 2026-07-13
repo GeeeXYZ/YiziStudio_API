@@ -24,11 +24,34 @@ export async function executeColorGrading(node, inputs) {
   if (imageUrl.startsWith('data:image')) {
     buffer = Buffer.from(imageUrl.split(',')[1], 'base64');
   } else {
-    const resp = await fetchWithRetry(imageUrl, { 
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(60000) 
-    });
-    if (!resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl} (Status: ${resp.status})`);
+    let resp;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      resp = await fetchWithRetry(imageUrl, { 
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer': 'https://x.ai/'
+        },
+        signal: AbortSignal.timeout(60000) 
+      });
+      
+      if (resp.ok) break;
+      
+      // If we hit 403 or 404, it might be a CDN delay from x.ai
+      if (resp.status === 403 || resp.status === 404) {
+        console.warn(`[ColorGrading] Fetch attempt ${attempt} got ${resp.status} for ${imageUrl}. CDN might be delayed, retrying...`);
+        if (attempt < 5) await new Promise(r => setTimeout(r, 2000 * attempt)); // 2s, 4s, 6s, 8s backoff
+        continue;
+      }
+      
+      // For other 4xx errors, don't retry
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+        break;
+      }
+    }
+    
+    if (!resp || !resp.ok) throw new Error(`ColorGrading: Failed to fetch image from ${imageUrl} (Status: ${resp ? resp.status : 'unknown'})`);
     buffer = Buffer.from(await resp.arrayBuffer());
   }
 
