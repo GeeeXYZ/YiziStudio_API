@@ -327,16 +327,39 @@ router.post('/toolkit/prompts/sync', authenticateToken, checkPermission('prompts
 // GET /toolkit/vision_api/registry
 router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) => {
   const apiyiSizes = [
-    { value: '1024x1024', label: '1024x1024 (1:1)' },
-    { value: '1280x720', label: '1280x720 (16:9)' },
-    { value: '720x1280', label: '720x1280 (9:16)' },
-    { value: '1152x864', label: '1152x864 (4:3)' },
-    { value: '864x1152', label: '864x1152 (3:4)' },
-    { value: '2048x2048', label: '2048x2048 (1:1 HD)' },
-    { value: '2048x1152', label: '2048x1152 (16:9 HD)' },
-    { value: '1152x2048', label: '1152x2048 (9:16 HD)' },
-    { value: '2048x1536', label: '2048x1536 (4:3 HD)' },
-    { value: '1536x2048', label: '1536x2048 (3:4 HD)' }
+    { value: 'auto', label: '自适应 (auto)' },
+    { value: '1280x1280', label: '1K 1:1 (1280x1280)' },
+    { value: '1280x720', label: '1K 16:9 (1280x720)' },
+    { value: '720x1280', label: '1K 9:16 (720x1280)' },
+    { value: '1280x960', label: '1K 4:3 (1280x960)' },
+    { value: '960x1280', label: '1K 3:4 (960x1280)' },
+    { value: '1280x848', label: '1K 3:2 (1280x848)' },
+    { value: '848x1280', label: '1K 2:3 (848x1280)' },
+    { value: '1280x1024', label: '1K 5:4 (1280x1024)' },
+    { value: '1024x1280', label: '1K 4:5 (1024x1280)' },
+    { value: '1280x544', label: '1K 21:9 (1280x544)' },
+
+    { value: '2048x2048', label: '2K 1:1 (2048x2048)' },
+    { value: '2048x1152', label: '2K 16:9 (2048x1152)' },
+    { value: '1152x2048', label: '2K 9:16 (1152x2048)' },
+    { value: '2048x1536', label: '2K 4:3 (2048x1536)' },
+    { value: '1536x2048', label: '2K 3:4 (1536x2048)' },
+    { value: '2048x1360', label: '2K 3:2 (2048x1360)' },
+    { value: '1360x2048', label: '2K 2:3 (1360x2048)' },
+    { value: '2048x1632', label: '2K 5:4 (2048x1632)' },
+    { value: '1632x2048', label: '2K 4:5 (1632x2048)' },
+    { value: '2048x864', label: '2K 21:9 (2048x864)' },
+
+    { value: '2880x2880', label: '4K 1:1 (2880x2880)' },
+    { value: '3840x2160', label: '4K 16:9 (3840x2160)' },
+    { value: '2160x3840', label: '4K 9:16 (2160x3840)' },
+    { value: '3312x2480', label: '4K 4:3 (3312x2480)' },
+    { value: '2480x3312', label: '4K 3:4 (2480x3312)' },
+    { value: '3520x2336', label: '4K 3:2 (3520x2336)' },
+    { value: '2336x3520', label: '4K 2:3 (2336x3520)' },
+    { value: '3216x2560', label: '4K 5:4 (3216x2560)' },
+    { value: '2560x3216', label: '4K 4:5 (2560x3216)' },
+    { value: '3840x1632', label: '4K 21:9 (3840x1632)' }
   ];
 
   const registry = [
