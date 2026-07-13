@@ -17,17 +17,22 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
     }
   }
 
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 4;
   const DOWNLOAD_TIMEOUT_MS = 60000;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       if (!buffer) {
         const response = await fetchWithRetry(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          headers: { 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://x.ai/'
+          },
           signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText} (URL: ${url.substring(0,80)})`);
         const arrayBuffer = await response.arrayBuffer();
         buffer = Buffer.from(arrayBuffer);
 
