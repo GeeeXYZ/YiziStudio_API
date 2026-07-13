@@ -84,8 +84,19 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
   let { workflow_json, mock_order } = req.body;
   
   mock_order = mock_order || {};
-  if (req.user && req.user.id) {
-    mock_order.run_by_admin_id = req.user.id;
+  if (req.user) {
+    if (req.user.id) {
+      mock_order.run_by_admin_id = req.user.id;
+    } else if (req.user.email) {
+      try {
+        const adminRes = await pool.query('SELECT id FROM "yizi_admins" WHERE email = $1', [req.user.email]);
+        if (adminRes.rows.length > 0) {
+          mock_order.run_by_admin_id = adminRes.rows[0].id;
+        }
+      } catch (e) {
+        console.error('[Pipeline] Failed to lookup admin id by email:', e.message);
+      }
+    }
   }
   
   if (!workflow_json && mock_order?.order_id) {

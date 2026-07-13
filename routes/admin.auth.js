@@ -30,8 +30,8 @@ router.post('/admin/login', async (req, res) => {
             visible_projects = typeof roleRes.rows[0].visible_projects === 'string' ? JSON.parse(roleRes.rows[0].visible_projects || '[]') : (roleRes.rows[0].visible_projects || []);
           }
         }
-        const token = jwt.sign({ email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
-        return res.json({ msg: 'ok', result: { token, email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id, permissions, visible_projects } });
+        const token = jwt.sign({ id: adminUser.id, email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '7d' });
+        return res.json({ msg: 'ok', result: { token, id: adminUser.id, email: adminUser.email, is_super: adminUser.is_super, role_id: adminUser.role_id, permissions, visible_projects } });
       }
     }
     res.json({ msg: 'err', info: '用户名或密码错误' });
