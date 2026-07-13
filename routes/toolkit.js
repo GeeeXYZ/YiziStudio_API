@@ -510,10 +510,13 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
     let runByUserId = null;
     if (orderId) {
       try {
-        const orderRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [orderId]);
-        if (orderRes.rows.length > 0 && orderRes.rows[0].openid) {
-          const userRes = await pool.query('SELECT _id FROM "yizi_users" WHERE openid = $1', [orderRes.rows[0].openid]);
-          if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id;
+        const orderRes = await pool.query('SELECT openid, user_id FROM "yizi_orders" WHERE id = $1', [orderId]);
+        if (orderRes.rows.length > 0) {
+          const orderUserIdentifier = orderRes.rows[0].user_id || orderRes.rows[0].openid;
+          if (orderUserIdentifier) {
+            const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1', [orderUserIdentifier]);
+            if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id || userRes.rows[0].user_id;
+          }
         }
       } catch (e) {
         console.error('[Toolkit] Failed to reverse lookup user_id:', e.message);
@@ -659,10 +662,13 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
         let runByUserId = null;
         if (orderId) {
           try {
-            const orderRes = await pool.query('SELECT openid FROM "yizi_orders" WHERE id = $1', [orderId]);
-            if (orderRes.rows.length > 0 && orderRes.rows[0].openid) {
-              const userRes = await pool.query('SELECT _id FROM "yizi_users" WHERE openid = $1', [orderRes.rows[0].openid]);
-              if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id;
+            const orderRes = await pool.query('SELECT openid, user_id FROM "yizi_orders" WHERE id = $1', [orderId]);
+            if (orderRes.rows.length > 0) {
+              const orderUserIdentifier = orderRes.rows[0].user_id || orderRes.rows[0].openid;
+              if (orderUserIdentifier) {
+                const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1', [orderUserIdentifier]);
+                if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id || userRes.rows[0].user_id;
+              }
             }
           } catch (e) {
             console.error('[Toolkit] Failed to reverse lookup user_id:', e.message);

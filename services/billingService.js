@@ -44,21 +44,7 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
     try {
       await client.query('BEGIN');
 
-      // Deduct from Admin if applicable
-      if (contextInfo.run_by_admin_id && totalCost > 0) {
-        await client.query(
-          `UPDATE yizi_admins SET balance = balance - $1 WHERE id = $2`,
-          [totalCost, contextInfo.run_by_admin_id]
-        );
-      }
-
-      // Deduct from Frontend User if applicable
-      if (contextInfo.run_by_user_id && totalCost > 0) {
-        await client.query(
-          `UPDATE yizi_users SET points = points - $1 WHERE user_id = $2 OR _id = $2`,
-          [totalCost, contextInfo.run_by_user_id]
-        );
-      }
+      // 注：业务逻辑上 API 开销（Cost）属于内部记账，不从用户的点数（前端已按照 SKU 零售价扣除）或管理员余额中直接扣减，仅做 Ledger 纯记账。
 
       // Record Ledger
       await client.query(
@@ -74,7 +60,7 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
       );
 
       await client.query('COMMIT');
-      console.log(`[Billing] Task ${contextInfo.task_id}: Deducted ${totalCost}`);
+      console.log(`[Billing] Task ${contextInfo.task_id}: Recorded Ledger for ${totalCost} api cost`);
     } catch (txErr) {
       await client.query('ROLLBACK');
       throw txErr;

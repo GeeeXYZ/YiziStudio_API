@@ -16,6 +16,9 @@ export async function executeColorGrading(node, inputs) {
   const brightness = parseFloat(inputs.brightness ?? node.data.brightness ?? 1.0); // 0.5 - 2.0
   const contrast = parseFloat(inputs.contrast ?? node.data.contrast ?? 1.0);       // 0.5 - 2.0
   const temperature = parseFloat(inputs.temperature ?? node.data.temperature ?? 0); // -100 to 100
+  const redBalance = parseFloat(inputs.redBalance ?? node.data.redBalance ?? 1.0);  // 0.0 - 2.0 (Color Balance R)
+  const greenBalance = parseFloat(inputs.greenBalance ?? node.data.greenBalance ?? 1.0); // 0.0 - 2.0 (Color Balance G)
+  const blueBalance = parseFloat(inputs.blueBalance ?? node.data.blueBalance ?? 1.0); // 0.0 - 2.0 (Color Balance B)
   const noise = parseFloat(inputs.noise ?? node.data.noise ?? 0);                 // 0 to 100
   const sharpen = parseFloat(inputs.sharpen ?? node.data.sharpen ?? 0);             // 0 to 10
 
@@ -72,14 +75,14 @@ export async function executeColorGrading(node, inputs) {
     imgInstance = imgInstance.linear(slope, intercept);
   }
 
-  // C. Color Temperature (using recomb matrix)
-  if (temperature !== 0) {
+  // C. Color Temperature & Color Balance (using recomb matrix)
+  if (temperature !== 0 || redBalance !== 1.0 || greenBalance !== 1.0 || blueBalance !== 1.0) {
     const temp = temperature / 100; // normalize to -1 to 1
     // Warm: increase red/green, decrease blue
     // Cool: decrease red/green, increase blue
-    const rGain = 1 + (temp > 0 ? temp * 0.08 : temp * 0.04);
-    const gGain = 1 + (temp > 0 ? temp * 0.02 : -temp * 0.02);
-    const bGain = 1 + (temp > 0 ? -temp * 0.08 : -temp * 0.12);
+    const rGain = (1 + (temp > 0 ? temp * 0.08 : temp * 0.04)) * redBalance;
+    const gGain = (1 + (temp > 0 ? temp * 0.02 : -temp * 0.02)) * greenBalance;
+    const bGain = (1 + (temp > 0 ? -temp * 0.08 : -temp * 0.12)) * blueBalance;
 
     imgInstance = imgInstance.recomb([
       [rGain, 0, 0],
