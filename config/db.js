@@ -44,7 +44,7 @@ pool.query(`
 // Initialize cost tracking tables
 pool.query(`
   CREATE TABLE IF NOT EXISTS yizi_node_costs (
-      id SERIAL PRIMARY KEY,
+      id VARCHAR(50) PRIMARY KEY,
       node_type VARCHAR(50) NOT NULL UNIQUE,
       cost NUMERIC(10, 4) DEFAULT 0,
       currency VARCHAR(20) DEFAULT 'CNY',
@@ -53,7 +53,7 @@ pool.query(`
   );
 
   CREATE TABLE IF NOT EXISTS yizi_execution_ledgers (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      id VARCHAR(50) PRIMARY KEY,
       task_id VARCHAR(100),
       run_by_admin_id INT,
       run_by_user_id VARCHAR,
