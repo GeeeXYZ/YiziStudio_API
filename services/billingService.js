@@ -2,7 +2,7 @@ import { pool } from '../config/db.js';
 
 /**
  * Perform billing calculation and deduction for a completed pipeline execution.
- * @param {Object} executionLedgers - Map of ledger entries: { "nodeType::modelId": { node_type, model, count } }
+ * @param {Object} executionLedgers - Map of ledger entries: { "nodeType": { node_type, count } }
  * @param {Object} contextInfo - { task_id, run_by_admin_id, run_by_user_id }
  */
 export async function finalizePipelineBilling(executionLedgers, contextInfo) {
@@ -11,12 +11,12 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
 
   try {
     // 1. Fetch current pricing for the executed nodes
-    const { rows: pricingRows } = await pool.query(`SELECT node_type, model, cost FROM yizi_node_costs`);
+    const { rows: pricingRows } = await pool.query(`SELECT node_type, cost FROM yizi_node_costs`);
     
     // Convert to quick lookup map
     const pricingMap = {};
     for (const row of pricingRows) {
-      pricingMap[`${row.node_type}::${row.model}`] = row;
+      pricingMap[row.node_type] = row;
     }
 
     let totalCost = 0;
@@ -24,8 +24,7 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
 
     // 2. Calculate totals
     for (const entry of ledgerValues) {
-      // Try precise match first, then fallback to wildcard '*' model pricing
-      let price = pricingMap[`${entry.node_type}::${entry.model}`] || pricingMap[`${entry.node_type}::*`];
+      let price = pricingMap[entry.node_type];
       
       const costPerRun = price ? parseFloat(price.cost) : 0;
       const totalNodeCost = costPerRun * entry.count;
@@ -34,7 +33,6 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
 
       finalDetails.push({
         node_type: entry.node_type,
-        model: entry.model,
         count: entry.count,
         cost_per_run: costPerRun,
         total_cost: totalNodeCost

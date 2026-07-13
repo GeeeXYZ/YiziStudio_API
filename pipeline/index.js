@@ -192,10 +192,9 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           traceLogs.push(traceLog);
 
           // Track for billing
-          const modelId = node.data?.modelId || node.data?.model || '*';
-          const ledgerKey = `${node.type}::${modelId}`;
+          const ledgerKey = node.type;
           if (!executionLedger[ledgerKey]) {
-            executionLedger[ledgerKey] = { node_type: node.type, model: modelId, count: 0 };
+            executionLedger[ledgerKey] = { node_type: node.type, count: 0 };
           }
           executionLedger[ledgerKey].count += 1;
           

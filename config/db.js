@@ -45,13 +45,11 @@ pool.query(`
 pool.query(`
   CREATE TABLE IF NOT EXISTS yizi_node_costs (
       id SERIAL PRIMARY KEY,
-      node_type VARCHAR(50) NOT NULL,
-      model VARCHAR(100) DEFAULT '*',
+      node_type VARCHAR(50) NOT NULL UNIQUE,
       cost NUMERIC(10, 4) DEFAULT 0,
       currency VARCHAR(20) DEFAULT 'CNY',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(node_type, model)
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE IF NOT EXISTS yizi_execution_ledgers (
