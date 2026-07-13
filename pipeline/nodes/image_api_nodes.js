@@ -472,7 +472,9 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
     model: node.data.modelId || 'grok-imagine-image-quality',
     prompt: prompt,
     resolution: resolution,
+    response_format: 'b64_json'
   };
+
   
   if (aspectRatio && aspectRatio !== 'auto') {
     payload.aspect_ratio = aspectRatio;
