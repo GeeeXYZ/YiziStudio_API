@@ -8,7 +8,8 @@ export async function uploadToOSS(ossClient, url, openid, order_id, set_index, f
   let ext = 'png';
 
   if (url.startsWith('data:image')) {
-    const matches = url.match(/^data:image\/(\w+);base64,(.+)$/);
+    const cleanedUrl = url.replace(/[\n\r]/g, '');
+    const matches = cleanedUrl.match(/^data:image\/(\w+);base64,(.+)$/);
     if (matches) {
       ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
       buffer = Buffer.from(matches[2], 'base64');
