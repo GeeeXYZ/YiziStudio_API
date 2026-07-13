@@ -497,10 +497,20 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
     
     const outputs = await runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null);
     
+    let runByAdminId = req.user?.id;
+    if (!runByAdminId && req.user?.email) {
+      try {
+        const adminRes = await pool.query('SELECT id FROM "yizi_admins" WHERE email = $1', [req.user.email]);
+        if (adminRes.rows.length > 0) runByAdminId = adminRes.rows[0].id;
+      } catch (e) {
+        console.error('[Toolkit] Failed to lookup admin id by email:', e.message);
+      }
+    }
+
     // Process billing
     await finalizePipelineBilling(
       { [virtualNode.type]: { node_type: virtualNode.type, count: 1 } },
-      { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: req.user?.id }
+      { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: runByAdminId }
     );
     
     if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
@@ -623,10 +633,20 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
     // Fire and forget (No await here)
     runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null)
       .then(async outputs => {
+        let runByAdminId = req.user?.id;
+        if (!runByAdminId && req.user?.email) {
+          try {
+            const adminRes = await pool.query('SELECT id FROM "yizi_admins" WHERE email = $1', [req.user.email]);
+            if (adminRes.rows.length > 0) runByAdminId = adminRes.rows[0].id;
+          } catch (e) {
+            console.error('[Toolkit] Failed to lookup admin id by email:', e.message);
+          }
+        }
+
         // Process billing
         await finalizePipelineBilling(
           { [virtualNode.type]: { node_type: virtualNode.type, count: 1 } },
-          { task_id: `toolkit_async_${taskId}`, run_by_admin_id: req.user?.id }
+          { task_id: `toolkit_async_${taskId}`, run_by_admin_id: runByAdminId }
         );
 
         if (outputs && (outputs.output_images || outputs.output || outputs.images)) {
