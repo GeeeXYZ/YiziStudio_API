@@ -475,8 +475,9 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
     const outputs = await runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null);
     
     // Process billing
+    const modelToLog = virtualNode.data.modelId || '*';
     await finalizePipelineBilling(
-      { [`${virtualNode.type}::${virtualNode.data.modelId}`]: { node_type: virtualNode.type, model: virtualNode.data.modelId, count: 1 } },
+      { [`${virtualNode.type}::${modelToLog}`]: { node_type: virtualNode.type, model: modelToLog, count: 1 } },
       { task_id: `toolkit_direct_${Date.now()}`, run_by_admin_id: req.user?.id }
     );
     
@@ -601,8 +602,9 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
     runSingleNode(virtualNode, virtualInputs, process.env, pool, mockOrderContext, null)
       .then(async outputs => {
         // Process billing
+        const modelToLog = virtualNode.data.modelId || '*';
         await finalizePipelineBilling(
-          { [`${virtualNode.type}::${virtualNode.data.modelId}`]: { node_type: virtualNode.type, model: virtualNode.data.modelId, count: 1 } },
+          { [`${virtualNode.type}::${modelToLog}`]: { node_type: virtualNode.type, model: modelToLog, count: 1 } },
           { task_id: `toolkit_async_${taskId}`, run_by_admin_id: req.user?.id }
         );
 
