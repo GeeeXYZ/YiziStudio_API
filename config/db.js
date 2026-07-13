@@ -53,7 +53,7 @@ pool.query(`
   );
 
   CREATE TABLE IF NOT EXISTS yizi_execution_ledgers (
-      id VARCHAR(50) PRIMARY KEY,
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       task_id VARCHAR(100),
       run_by_admin_id INT,
       run_by_user_id VARCHAR,

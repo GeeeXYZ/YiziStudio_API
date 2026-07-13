@@ -806,8 +806,8 @@ router.post('/admin/yizi_prompt_sets/:action(*)', authenticateToken, checkLogica
 router.post('/admin/yizi_prompt_groups/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_oss_delivery_imgs/:action(*)', authenticateToken, checkLogicalModule('workspace'), rpcHandler);
-router.post('/admin/yizi_node_costs/:action(*)', authenticateToken, checkLogicalModule('settings'), rpcHandler);
-router.post('/admin/yizi_execution_ledgers/:action(*)', authenticateToken, checkLogicalModule('settings'), rpcHandler);
+router.post('/admin/yizi_node_costs/:action(*)', authenticateToken, checkLogicalModule('billing'), rpcHandler);
+router.post('/admin/yizi_execution_ledgers/:action(*)', authenticateToken, checkLogicalModule('billing'), rpcHandler);
 
 // Shared Tables across multiple logical modules
 router.post('/admin/yizi_orders/:action(*)', authenticateToken, checkLogicalModule(['orders', 'workspace']), rpcHandler);
