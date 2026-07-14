@@ -510,11 +510,11 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
     let runByUserId = null;
     if (orderId) {
       try {
-        const orderRes = await pool.query('SELECT openid, user_id FROM "yizi_orders" WHERE id = $1', [orderId]);
+        const orderRes = await pool.query('SELECT openid, phone FROM "yizi_orders" WHERE id = $1', [orderId]);
         if (orderRes.rows.length > 0) {
-          const orderUserIdentifier = orderRes.rows[0].user_id || orderRes.rows[0].openid;
+          const orderUserIdentifier = orderRes.rows[0].openid || orderRes.rows[0].phone;
           if (orderUserIdentifier) {
-            const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1', [orderUserIdentifier]);
+            const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1 OR phone_number = $1', [orderUserIdentifier]);
             if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id || userRes.rows[0].user_id;
           }
         }
@@ -662,11 +662,11 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
         let runByUserId = null;
         if (orderId) {
           try {
-            const orderRes = await pool.query('SELECT openid, user_id FROM "yizi_orders" WHERE id = $1', [orderId]);
+            const orderRes = await pool.query('SELECT openid, phone FROM "yizi_orders" WHERE id = $1', [orderId]);
             if (orderRes.rows.length > 0) {
-              const orderUserIdentifier = orderRes.rows[0].user_id || orderRes.rows[0].openid;
+              const orderUserIdentifier = orderRes.rows[0].openid || orderRes.rows[0].phone;
               if (orderUserIdentifier) {
-                const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1', [orderUserIdentifier]);
+                const userRes = await pool.query('SELECT _id, user_id FROM "yizi_users" WHERE _id = $1 OR user_id = $1 OR phone_number = $1', [orderUserIdentifier]);
                 if (userRes.rows.length > 0) runByUserId = userRes.rows[0]._id || userRes.rows[0].user_id;
               }
             }
