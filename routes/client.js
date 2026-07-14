@@ -338,9 +338,23 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
     const isAutoTrigger = skuData.auto_trigger === true || skuData.auto_trigger === 'true' || skuData.auto_trigger === 1 || skuData.auto_trigger === '1';
     console.log(`[Auto Trigger Check] Order ${orderId} | auto_trigger=${skuData.auto_trigger} (resolved: ${isAutoTrigger}) | workflow=${skuData.workflow} | workflow_type=${skuData.workflow_type}`);
     
-    if (isAutoTrigger && skuData.workflow && skuData.workflow_type === 'api_pipeline') {
+    if (isAutoTrigger && skuData.workflow) {
       try {
-        const caseRes = await pool.query('SELECT data FROM "yizi_comfyui_workflows" WHERE uuid = $1', [skuData.workflow]);
+        let caseRes = { rows: [] };
+        if (skuData.workflow_type === 'comfyui') {
+          caseRes = await pool.query('SELECT data FROM "yizi_comfyui_workflows" WHERE uuid = $1', [skuData.workflow]);
+        } else if (skuData.workflow_type === 'api_pipeline') {
+          const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+          caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+        } else {
+          // fallback
+          const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+          caseRes = await pool.query(`SELECT data FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+          if (caseRes.rows.length === 0) {
+            caseRes = await pool.query('SELECT data FROM "yizi_comfyui_workflows" WHERE uuid = $1', [skuData.workflow]);
+          }
+        }
+        
         console.log(`[Auto Trigger] Found ${caseRes.rows.length} workflow(s) for uuid=${skuData.workflow}`);
         
         if (caseRes.rows.length > 0) {
