@@ -15,7 +15,13 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ msg: 'err', info: 'No token provided' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', (err, user) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    console.error('FATAL ERROR: JWT_SECRET environment variable is not set.');
+    return res.status(500).json({ msg: 'err', info: 'Server configuration error' });
+  }
+
+  jwt.verify(token, secret, (err, user) => {
     if (err) {
       if (isPublic) {
         req.user = null;

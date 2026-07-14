@@ -18,6 +18,19 @@ async function sendFeishuCard(title, color, markdownText) {
       return; // Not configured or invalid, silent ignore
     }
 
+    // SSRF Protection: Restrict to known webhook domains
+    try {
+      const urlObj = new URL(webhookUrl);
+      const allowedDomains = ['open.feishu.cn', 'oapi.dingtalk.com'];
+      if (!allowedDomains.includes(urlObj.hostname)) {
+        console.error(`[Notification] Security Error: Blocked SSRF attempt. Disallowed webhook hostname: ${urlObj.hostname}`);
+        return;
+      }
+    } catch (e) {
+      console.error(`[Notification] Security Error: Malformed webhook URL.`);
+      return;
+    }
+
     const isDingTalk = webhookUrl.includes('dingtalk.com');
     let payload;
 
@@ -74,6 +87,11 @@ export async function handleNotification(event, payload) {
 
   const timeStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
+  // Sanitize user input to prevent Markdown Injection
+  const sanitizedComment = (comment || '无内容')
+    .replace(/[<>[\]`*_]/g, '') // remove markdown/html characters
+    .replace(/\n/g, ' '); // prevent multi-line breaks
+
   switch (event) {
     case 'NOTIFY_NEW_ORDER':
       title = '🛒 新订单创建';
@@ -84,7 +102,7 @@ export async function handleNotification(event, payload) {
     case 'NOTIFY_NEW_COMMENT':
       title = '💬 新增反馈评论';
       color = 'yellow';
-      markdown = `**订单 ID:** ${orderId}\n**用户:** ${phone || openid}\n**时间:** ${timeStr}\n\n**评论内容:**\n> ${comment || '无内容'}`;
+      markdown = `**订单 ID:** ${orderId}\n**用户:** ${phone || openid}\n**时间:** ${timeStr}\n\n**评论内容:**\n> ${sanitizedComment}`;
       break;
 
     case 'NOTIFY_DELIVERY_COMPLETE':
