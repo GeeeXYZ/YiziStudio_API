@@ -6,10 +6,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool, 
   const workflowId = node.data.workflow_uuid;
   if (!workflowId) throw new Error('comfy_remote node missing workflow_uuid');
   
-  const colsRes = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'yizi_cases'`);
-  const cols = colsRes.rows.map(r => r.column_name);
-  const casePk = cols.includes('uuid') ? 'uuid' : 'id';
-  const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflowId]);
+  const caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [workflowId]);
   if (caseRes.rows.length === 0) throw new Error(`ComfyUI workflow not found: ${workflowId}`);
   const caseData = caseRes.rows[0];
   const comfyWorkflowJsonStr = caseData.workflow_json || (caseData.data && caseData.data.workflow_json) || (typeof caseData.data === 'string' ? caseData.data : JSON.stringify(caseData.data));

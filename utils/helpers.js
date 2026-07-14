@@ -17,7 +17,8 @@ function getActualTableName(db_name) {
     'vip_settings': 'yizi_vip_settings',
     'comments': 'yizi_comments',
     'front_sku_settings': 'yizi_front_sku_settings',
-    'oss_delivery_imgs': 'yizi_oss_delivery_imgs'
+    'oss_delivery_imgs': 'yizi_oss_delivery_imgs',
+    'comfyui_workflows': 'yizi_comfyui_workflows'
   };
   
   return mapping[db_name] || `yizi_${db_name}`;

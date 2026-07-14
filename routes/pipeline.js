@@ -42,8 +42,7 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
       }
 
       if (workflow_uuid) {
-        const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-        const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflow_uuid]);
+        const caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [workflow_uuid]);
         if (caseRes.rows.length > 0) {
            const row = caseRes.rows[0];
            const caseData = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
@@ -194,8 +193,7 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
             }
             
             if (skuData.workflow) {
-              const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-              const caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+              const caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [skuData.workflow]);
               if (caseRes.rows.length > 0) {
                  const caseRow = caseRes.rows[0];
                  const caseData = typeof caseRow.data === 'string' ? JSON.parse(caseRow.data) : (caseRow.data || {});

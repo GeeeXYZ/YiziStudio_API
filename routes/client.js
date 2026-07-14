@@ -340,7 +340,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
     
     if (isAutoTrigger && skuData.workflow && skuData.workflow_type === 'api_pipeline') {
       try {
-        const caseRes = await pool.query('SELECT data FROM "yizi_cases" WHERE uuid = $1', [skuData.workflow]);
+        const caseRes = await pool.query('SELECT data FROM "yizi_comfyui_workflows" WHERE uuid = $1', [skuData.workflow]);
         console.log(`[Auto Trigger] Found ${caseRes.rows.length} workflow(s) for uuid=${skuData.workflow}`);
         
         if (caseRes.rows.length > 0) {
