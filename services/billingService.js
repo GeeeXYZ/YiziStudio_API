@@ -27,9 +27,10 @@ export async function finalizePipelineBilling(executionLedgers, contextInfo) {
       let price = pricingMap[entry.node_type];
       
       const costPerRun = price ? parseFloat(price.cost) : 0;
-      const totalNodeCost = costPerRun * entry.count;
+      const totalNodeCost = parseFloat(Number(costPerRun * entry.count).toFixed(4));
 
       totalCost += totalNodeCost;
+      totalCost = parseFloat(Number(totalCost).toFixed(4));
 
       finalDetails.push({
         node_type: entry.node_type,
