@@ -29,26 +29,35 @@ router.get('/api_pipeline/order_prompt/:order_id', authenticateToken, async (req
       
       let workflow_uuid = orderData.workflow;
       
+      let skuDataObj = null;
       if (!workflow_uuid && orderData.planId) {
         const skuPk = await getTableColumns('yizi_sku').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
         const skuRes = await pool.query(`SELECT data FROM "yizi_sku" WHERE "${skuPk}" = $1`, [orderData.planId]);
         if (skuRes.rows.length > 0) {
-          const skuData = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
-          console.log(`[order_prompt] skuData.workflow =`, skuData.workflow);
-          workflow_uuid = skuData.workflow;
+          skuDataObj = typeof skuRes.rows[0].data === 'string' ? JSON.parse(skuRes.rows[0].data) : (skuRes.rows[0].data || {});
+          console.log(`[order_prompt] skuData.workflow =`, skuDataObj.workflow);
+          workflow_uuid = skuDataObj.workflow;
         } else {
            console.log(`[order_prompt] No SKU found for planId:`, orderData.planId);
         }
       }
 
       if (workflow_uuid) {
-        // Try api_pipeline table (yizi_cases) first
-        const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-        let caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflow_uuid]);
+        let caseRes = { rows: [] };
         
-        // Fallback to yizi_comfyui_workflows
-        if (caseRes.rows.length === 0) {
+        // Exact targeting based on workflow_type
+        if (skuDataObj && skuDataObj.workflow_type === 'comfyui') {
           caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [workflow_uuid]);
+        } else if (skuDataObj && skuDataObj.workflow_type === 'api_pipeline') {
+          const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+          caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflow_uuid]);
+        } else {
+          // Fallback for older orders missing workflow_type
+          const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+          caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [workflow_uuid]);
+          if (caseRes.rows.length === 0) {
+            caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [workflow_uuid]);
+          }
         }
 
         if (caseRes.rows.length > 0) {
@@ -201,11 +210,21 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
             }
             
             if (skuData.workflow) {
-              const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
-              let caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+              let caseRes = { rows: [] };
               
-              if (caseRes.rows.length === 0) {
+              if (skuData.workflow_type === 'comfyui') {
                 caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [skuData.workflow]);
+              } else if (skuData.workflow_type === 'api_pipeline') {
+                const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+                caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+              } else {
+                // Fallback
+                const casePk = await getTableColumns('yizi_cases').then(cols => cols.includes('uuid') ? 'uuid' : 'id');
+                caseRes = await pool.query(`SELECT * FROM "yizi_cases" WHERE "${casePk}" = $1`, [skuData.workflow]);
+                
+                if (caseRes.rows.length === 0) {
+                  caseRes = await pool.query(`SELECT * FROM "yizi_comfyui_workflows" WHERE "uuid" = $1`, [skuData.workflow]);
+                }
               }
               
               if (caseRes.rows.length > 0) {
