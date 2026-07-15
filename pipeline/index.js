@@ -55,6 +55,9 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'seedream': return await executeSeedream(node, inputs, env, pool, abortSignal);
     
     case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal);
+    case 'preset_nanobanana': 
+      node.data.modelId = node.data.modelId || 'gemini-3-pro-image-preview';
+      return await executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal);
     case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal);
     case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext, abortSignal);
     case 'grok_imagine': return await executeGrokImagine(node, inputs, env, pool, abortSignal);
@@ -150,7 +153,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
         
         const nodeNames = {
           order_input: '解析订单参数', toolkit_input: '解析工作台参数',
-          preset_seedream: '大模型生图推理', preset_apiyi: '大模型生图推理',
+          preset_seedream: '引擎生图', preset_apiyi: '引擎生图', preset_nanobanana: 'NanoBanana生图',
           preset_grsai: '大模型生图推理', comfy_remote: '投递到远程工作流',
           oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
           prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本',

@@ -401,6 +401,13 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
       ]
     },
     { 
+      id: 'preset_nanobanana', 
+      name: 'Nano Banana Pro 引擎', 
+      models: [
+        { id: 'gemini-3-pro-image-preview', name: 'Nano Banana Pro', sizes: apiyiSizes }
+      ]
+    },
+    { 
       id: 'seedream', 
       name: 'Seedream', 
       models: [
