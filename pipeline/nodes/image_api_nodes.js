@@ -569,7 +569,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
 
 
 export async function executeNanobananaPreset(node, inputs, env, pool, orderContext, abortSignal) {
-  const apiyiEndpoint = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
+  const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
   const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
 
   if (!apiKey) throw new Error('ApiYi API Key not configured');
@@ -585,6 +585,33 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   const modelId = node.data.modelId || 'gemini-3-pro-image-preview';
   const size = node.data.imageResolution || '1024x1024';
 
+  // Helper to convert '2752x1536' -> { aspectRatio: '16:9', imageSize: '2K' }
+  const getGeminiSize = (sizeStr) => {
+    if (sizeStr === 'auto') return { aspectRatio: '1:1', imageSize: '1K' };
+    const [w, h] = sizeStr.split('x').map(Number);
+    if (!w || !h) return { aspectRatio: '1:1', imageSize: '1K' };
+    const pixels = w * h;
+    let imageSize = '1K';
+    if (pixels > 12000000) imageSize = '4K';
+    else if (pixels > 3000000) imageSize = '2K';
+    const ratio = w / h;
+    const ratios = [
+      { name: '1:1', val: 1 }, { name: '16:9', val: 16/9 }, { name: '9:16', val: 9/16 },
+      { name: '4:3', val: 4/3 }, { name: '3:4', val: 3/4 }, { name: '3:2', val: 3/2 },
+      { name: '2:3', val: 2/3 }, { name: '5:4', val: 5/4 }, { name: '4:5', val: 4/5 },
+      { name: '21:9', val: 21/9 }
+    ];
+    let closest = ratios[0];
+    let minDiff = Math.abs(ratio - closest.val);
+    for (let i = 1; i < ratios.length; i++) {
+      const diff = Math.abs(ratio - ratios[i].val);
+      if (diff < minDiff) { minDiff = diff; closest = ratios[i]; }
+    }
+    return { aspectRatio: closest.name, imageSize };
+  };
+
+  const geminiSize = getGeminiSize(size);
+
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
     inputs.ref_image_2 || node.data.ref_image_2,
@@ -592,89 +619,49 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
     inputs.ref_images || node.data.ref_images || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
-  // Parse Gemini size
-  function parseGeminiSize(sizeStr) {
-    if (!sizeStr || sizeStr === 'auto') return { aspectRatio: "1:1", imageSize: "1K" };
-    const [w, h] = sizeStr.split('x').map(Number);
-    if (!w || !h) return { aspectRatio: "1:1", imageSize: "1K" };
-    
-    const maxDim = Math.max(w, h);
-    let imageSize = '1K';
-    if (maxDim > 3000) imageSize = '4K';
-    else if (maxDim > 1600) imageSize = '2K';
-    else imageSize = '1K';
+  let base = endpointBase.replace(/\/v1(beta)?\/?$/, '');
+  let endpointUrl = `${base}/v1beta/models/${modelId}:generateContent`;
 
-    const ratio = w / h;
-    let aspectRatio = "1:1";
-    const standardRatios = {
-      "1:1": 1, "16:9": 16/9, "9:16": 9/16, "4:3": 4/3, "3:4": 3/4,
-      "3:2": 3/2, "2:3": 2/3, "5:4": 5/4, "4:5": 4/5, "21:9": 21/9
-    };
-    
-    let minDiff = Infinity;
-    for (const [key, val] of Object.entries(standardRatios)) {
-      const diff = Math.abs(ratio - val);
-      if (diff < minDiff) {
-        minDiff = diff;
-        aspectRatio = key;
-      }
-    }
-    return { aspectRatio, imageSize };
-  }
+  let parts = [{ text: prompt }];
 
-  const { aspectRatio, imageSize } = parseGeminiSize(size);
-
-  const parts = [{ text: prompt }];
-
-  // Download reference images and convert to base64
   if (combined_images.length > 0) {
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
+      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
+      console.log(`[NanoBanana] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
       try {
-        let base64Data = "";
-        let mimeType = "image/jpeg";
-        if (imgUrl.startsWith('data:image')) {
-          const match = imgUrl.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            base64Data = match[2];
-          }
-        } else {
-          const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
-          if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
-          const arrayBuffer = await imgRes.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          base64Data = buffer.toString('base64');
-          if (buffer[0] === 0xFF && buffer[1] === 0xD8) mimeType = "image/jpeg";
-          else if (buffer[0] === 0x89 && buffer[1] === 0x50) mimeType = "image/png";
-          else if (buffer[0] === 0x52 && buffer[1] === 0x49) mimeType = "image/webp";
-        }
-        if (base64Data) {
-          parts.push({ inlineData: { mimeType, data: base64Data } });
-        }
+        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
+        
+        let mimeType = 'image/jpeg';
+        const typeStr = imgRes.headers.get('content-type') || '';
+        if (typeStr.includes('png')) mimeType = 'image/png';
+        else if (typeStr.includes('webp')) mimeType = 'image/webp';
+
+        const arrayBuffer = await imgRes.arrayBuffer();
+        const base64Data = Buffer.from(arrayBuffer).toString('base64');
+        parts.push({ inlineData: { mimeType, data: base64Data } });
       } catch (e) {
-        throw new Error(`NanoBanana failed to process reference image: ${e.message}`);
+        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
       }
     }
   }
-
-  let baseUrl = apiyiEndpoint.trim().replace(/\/v1\/?$/, '').replace(/\/$/, '');
-  const endpointUrl = `${baseUrl}/v1beta/models/${modelId}:generateContent`;
 
   const payload = {
     contents: [{ parts }],
     generationConfig: {
-      responseModalities: ["IMAGE"],
-      imageConfig: { aspectRatio, imageSize }
+      responseModalities: ['IMAGE'],
+      imageConfig: geminiSize
     }
   };
+
+  console.log(`[NanoBanana] Request: endpoint=${endpointUrl} | model=${modelId} | imageConfig=${JSON.stringify(geminiSize)} | images=${combined_images.length}`);
+  console.log(`[NanoBanana] Prompt (preview): ${String(prompt).substring(0, 200)}`);
 
   const headers = {
     'Authorization': `Bearer ${apiKey.trim()}`,
     'Content-Type': 'application/json'
   };
-
-  console.log(`[NanoBanana] Request: endpoint=${endpointUrl} | model=${modelId} | imageConfig=${JSON.stringify(payload.generationConfig.imageConfig)}`);
 
   const res = await fetchWithRetry(endpointUrl, {
     method: 'POST',
@@ -686,22 +673,24 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   if (!res.ok) {
     const errText = await res.text();
     console.error(`[NanoBanana] API Error Detail. Status: ${res.status}, Body: ${errText}, Prompt sent: ${prompt}`);
-    throw new Error(`NanoBanana API error: [${res.status}] ${errText.substring(0, 1000)}`);
+    throw new Error(`ApiYi NanoBanana API error: [${res.status}] ${errText.substring(0, 1000)} (Prompt sent: ${String(prompt).substring(0, 50)}...)`);
   }
 
   const data = await res.json();
-  
   const imageUrls = [];
-  if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
-    const candidateParts = data.candidates[0].content.parts;
-    for (const part of candidateParts) {
-      if (part.inlineData && part.inlineData.data) {
-        const mime = part.inlineData.mimeType || 'image/png';
-        imageUrls.push(`data:${mime};base64,${part.inlineData.data}`);
+  if (data.candidates && data.candidates.length > 0) {
+    for (const cand of data.candidates) {
+      if (cand.content && cand.content.parts) {
+        for (const part of cand.content.parts) {
+          if (part.inlineData && part.inlineData.data) {
+            let mime = part.inlineData.mimeType || 'image/png';
+            imageUrls.push(`data:${mime};base64,${part.inlineData.data}`);
+          }
+        }
       }
     }
   }
 
-  if (imageUrls.length === 0) throw new Error(`NanoBanana did not return any generated images.`);
+  if (imageUrls.length === 0) throw new Error(`NanoBanana (Gemini) did not return any generated images.`);
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
