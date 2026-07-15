@@ -823,6 +823,8 @@ const rpcHandler = async (req, res) => {
 
 // Explicit Domain Overrides (Intercepted before generic RPC to map logical permissions)
 router.post('/admin/yizi_cases/:action(*)', authenticateToken, checkLogicalModule('workflow'), rpcHandler);
+router.post('/admin/yizi_comfyui_workflows/:action(*)', authenticateToken, checkLogicalModule('workflow'), rpcHandler);
+router.post('/admin/yizi_workflow_logs/:action(*)', authenticateToken, checkLogicalModule('workflow'), rpcHandler);
 router.post('/admin/yizi_prompt_sets/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_prompt_groups/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
 router.post('/admin/yizi_prompts/:action(*)', authenticateToken, checkLogicalModule('prompts'), rpcHandler);
