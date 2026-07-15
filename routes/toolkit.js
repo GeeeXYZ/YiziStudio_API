@@ -416,15 +416,6 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
           id: 'gpt-image-2-vip', 
           name: 'GPT Image 2 VIP',
           sizes: apiyiSizes
-        },
-        { 
-          id: 'nano-banana-2', 
-          name: 'Nano Banana 2',
-          sizes: [
-            { value: '1:1',  label: '1:1 方形' },
-            { value: '16:9', label: '16:9 横版' },
-            { value: '9:16', label: '9:16 竖版' }
-          ]
         }
       ]
     },
@@ -438,9 +429,11 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
     },
     { 
       id: 'preset_nanobanana', 
-      name: 'Nano Banana Pro 引擎', 
+      name: 'Nano Banana 引擎', 
       models: [
-        { id: 'gemini-3-pro-image-preview', name: 'Nano Banana Pro', sizes: nanoBananaProSizes }
+        { id: 'gemini-3-pro-image', name: 'gemini-3-pro-image (正式版)', sizes: nanoBananaProSizes },
+        { id: 'gemini-3-pro-image-preview', name: 'gemini-3-pro-image-preview', sizes: nanoBananaProSizes },
+        { id: 'gemini-3.1-flash-image-preview', name: 'Nano Banana 2 (flash)', sizes: nanoBananaProSizes }
       ]
     },
     { 
