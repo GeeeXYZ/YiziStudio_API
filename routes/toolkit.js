@@ -362,6 +362,42 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
     { value: '3840x1632', label: '4K 21:9 (3840x1632)' }
   ];
 
+  const nanoBananaProSizes = [
+    { value: 'auto', label: '自适应 (auto)' },
+    { value: '1024x1024', label: '1K 1:1 (1024x1024)' },
+    { value: '1376x768', label: '1K 16:9 (1376x768)' },
+    { value: '768x1376', label: '1K 9:16 (768x1376)' },
+    { value: '1200x896', label: '1K 4:3 (1200x896)' },
+    { value: '896x1200', label: '1K 3:4 (896x1200)' },
+    { value: '1264x848', label: '1K 3:2 (1264x848)' },
+    { value: '848x1264', label: '1K 2:3 (848x1264)' },
+    { value: '1152x928', label: '1K 5:4 (1152x928)' },
+    { value: '928x1152', label: '1K 4:5 (928x1152)' },
+    { value: '1584x672', label: '1K 21:9 (1584x672)' },
+
+    { value: '2048x2048', label: '2K 1:1 (2048x2048)' },
+    { value: '2752x1536', label: '2K 16:9 (2752x1536)' },
+    { value: '1536x2752', label: '2K 9:16 (1536x2752)' },
+    { value: '2400x1792', label: '2K 4:3 (2400x1792)' },
+    { value: '1792x2400', label: '2K 3:4 (1792x2400)' },
+    { value: '2528x1696', label: '2K 3:2 (2528x1696)' },
+    { value: '1696x2528', label: '2K 2:3 (1696x2528)' },
+    { value: '2304x1856', label: '2K 5:4 (2304x1856)' },
+    { value: '1856x2304', label: '2K 4:5 (1856x2304)' },
+    { value: '3168x1344', label: '2K 21:9 (3168x1344)' },
+
+    { value: '4096x4096', label: '4K 1:1 (4096x4096)' },
+    { value: '5504x3072', label: '4K 16:9 (5504x3072)' },
+    { value: '3072x5504', label: '4K 9:16 (3072x5504)' },
+    { value: '4800x3584', label: '4K 4:3 (4800x3584)' },
+    { value: '3584x4800', label: '4K 3:4 (3584x4800)' },
+    { value: '5056x3392', label: '4K 3:2 (5056x3392)' },
+    { value: '3392x5056', label: '4K 2:3 (3392x5056)' },
+    { value: '4608x3712', label: '4K 5:4 (4608x3712)' },
+    { value: '3712x4608', label: '4K 4:5 (3712x4608)' },
+    { value: '6336x2688', label: '4K 21:9 (6336x2688)' }
+  ];
+
   const registry = [
     { 
       id: 'preset_grsai', 
@@ -404,7 +440,7 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
       id: 'preset_nanobanana', 
       name: 'Nano Banana Pro 引擎', 
       models: [
-        { id: 'gemini-3-pro-image-preview', name: 'Nano Banana Pro', sizes: apiyiSizes }
+        { id: 'gemini-3-pro-image-preview', name: 'Nano Banana Pro', sizes: nanoBananaProSizes }
       ]
     },
     { 
