@@ -1,7 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { pool, getPrimaryKeyColumn } from '../config/db.js';
+import { pool, getPrimaryKeyColumn, getTableColumns } from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { formatOrderRow } from '../utils/helpers.js';
 import { getOSSToken } from '../utils/oss.js';
@@ -709,8 +709,8 @@ router.post('/client/order/comment', authenticateToken, async (req, res) => {
 
 // 9. Confirm delivery image
 router.post('/client/order/confirm', authenticateToken, async (req, res) => {
-  const { id, delivery_id } = req.body;
-  if (!id || !delivery_id) return res.json({ msg: 'err', info: '参数错误' });
+  const { id, delivery_id, set_index, delivery_index } = req.body;
+  if (!id || (!delivery_id && (set_index === undefined || delivery_index === undefined))) return res.json({ msg: 'err', info: '参数错误' });
   try {
     // 1) Read current order data
     const orderRes = await pool.query('SELECT data FROM "yizi_orders" WHERE id = $1', [id]);
@@ -730,10 +730,11 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
     let confirmedImagesToInsert = [];
     
     if (Array.isArray(orderData.sets)) {
-      orderData.sets.forEach(s => {
+      orderData.sets.forEach((s, sIdx) => {
         if (Array.isArray(s.delivery_imgs)) {
-          s.delivery_imgs.forEach(d => {
-            if (d.id === delivery_id) {
+          s.delivery_imgs.forEach((d, dIdx) => {
+            const isMatch = delivery_id ? (d.id === delivery_id) : (sIdx === set_index && dIdx === delivery_index);
+            if (isMatch) {
               if (!d.confirmed_at) {
                 d.confirmed_at = new Date().toISOString();
                 if (d.img) confirmedImagesToInsert.push(d.img);
