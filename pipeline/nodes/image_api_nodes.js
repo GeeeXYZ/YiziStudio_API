@@ -583,34 +583,42 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'gemini-3-pro-image-preview';
-  const size = node.data.imageResolution || '1024x1024';
-
-  // Helper to convert '2752x1536' -> { aspectRatio: '16:9', imageSize: '2K' }
-  const getGeminiSize = (sizeStr) => {
-    if (sizeStr === 'auto') return { aspectRatio: '1:1', imageSize: '1K' };
-    const [w, h] = sizeStr.split('x').map(Number);
-    if (!w || !h) return { aspectRatio: '1:1', imageSize: '1K' };
-    const pixels = w * h;
-    let imageSize = '1K';
-    if (pixels > 12000000) imageSize = '4K';
-    else if (pixels > 3000000) imageSize = '2K';
-    const ratio = w / h;
-    const ratios = [
-      { name: '1:1', val: 1 }, { name: '16:9', val: 16/9 }, { name: '9:16', val: 9/16 },
-      { name: '4:3', val: 4/3 }, { name: '3:4', val: 3/4 }, { name: '3:2', val: 3/2 },
-      { name: '2:3', val: 2/3 }, { name: '5:4', val: 5/4 }, { name: '4:5', val: 4/5 },
-      { name: '21:9', val: 21/9 }
-    ];
-    let closest = ratios[0];
-    let minDiff = Math.abs(ratio - closest.val);
-    for (let i = 1; i < ratios.length; i++) {
-      const diff = Math.abs(ratio - ratios[i].val);
-      if (diff < minDiff) { minDiff = diff; closest = ratios[i]; }
-    }
-    return { aspectRatio: closest.name, imageSize };
-  };
-
-  const geminiSize = getGeminiSize(size);
+  
+  let geminiSize;
+  // If the node data already contains the modern separate fields (from updated Vue component or Toolkit)
+  if (node.data.aspectRatio && ['1K', '2K', '4K'].includes(node.data.imageResolution)) {
+    geminiSize = {
+      imageSize: node.data.imageResolution,
+      aspectRatio: node.data.aspectRatio
+    };
+  } else {
+    // Graceful fallback for legacy workflows where imageResolution was saved as 'WxH' (e.g. '2752x1536')
+    const sizeStr = node.data.imageResolution || 'auto';
+    const getGeminiSize = (sizeStr) => {
+      if (sizeStr === 'auto') return { aspectRatio: '1:1', imageSize: '1K' };
+      const [w, h] = sizeStr.split('x').map(Number);
+      if (!w || !h) return { aspectRatio: '1:1', imageSize: '1K' };
+      const pixels = w * h;
+      let imageSize = '1K';
+      if (pixels > 12000000) imageSize = '4K';
+      else if (pixels > 3000000) imageSize = '2K';
+      const ratio = w / h;
+      const ratios = [
+        { name: '1:1', val: 1 }, { name: '16:9', val: 16/9 }, { name: '9:16', val: 9/16 },
+        { name: '4:3', val: 4/3 }, { name: '3:4', val: 3/4 }, { name: '3:2', val: 3/2 },
+        { name: '2:3', val: 2/3 }, { name: '5:4', val: 5/4 }, { name: '4:5', val: 4/5 },
+        { name: '21:9', val: 21/9 }
+      ];
+      let closest = ratios[0];
+      let minDiff = Math.abs(ratio - closest.val);
+      for (let i = 1; i < ratios.length; i++) {
+        const diff = Math.abs(ratio - ratios[i].val);
+        if (diff < minDiff) { minDiff = diff; closest = ratios[i]; }
+      }
+      return { aspectRatio: closest.name, imageSize };
+    };
+    geminiSize = getGeminiSize(sizeStr);
+  }
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,

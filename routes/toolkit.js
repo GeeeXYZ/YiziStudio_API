@@ -19,8 +19,7 @@ function buildNodeDataForType(type, sizeValue) {
 
   switch (type) {
     case 'preset_apiyi':
-    case 'preset_nanobanana':
-      // 对应 ApiyiPresetNode.vue / NanobananaPresetNode.vue 的 v-model="localData.imageResolution"
+      // 对应 ApiyiPresetNode.vue 的 v-model="localData.imageResolution"
       return { imageResolution: sizeValue };
 
     case 'preset_grsai':
@@ -32,8 +31,9 @@ function buildNodeDataForType(type, sizeValue) {
       // 对应 SeedreamNode.vue 的 v-model="localData.size"
       return { size: sizeValue };
 
+    case 'preset_nanobanana':
     case 'preset_openrouter':
-      // 对应 OpenRouterPresetNode.vue 的 aspectRatio + imageResolution 两个独立字段
+      // 对应 OpenRouterPresetNode.vue / NanobananaPresetNode.vue 的 aspectRatio + imageResolution 两个独立字段
       return {
         imageResolution: sizeValue.includes('_') ? sizeValue.split('_')[0] : '2K',
         aspectRatio: sizeValue.includes('_') ? sizeValue.split('_')[1] : sizeValue
@@ -405,39 +405,39 @@ router.get('/toolkit/vision_api/registry', authenticateToken, async (req, res) =
   ];
 
   const nanoBananaProSizes = [
-    { value: 'auto', label: '自适应 (auto)' },
-    { value: '1024x1024', label: '1K 1:1 (1024x1024)' },
-    { value: '1376x768', label: '1K 16:9 (1376x768)' },
-    { value: '768x1376', label: '1K 9:16 (768x1376)' },
-    { value: '1200x896', label: '1K 4:3 (1200x896)' },
-    { value: '896x1200', label: '1K 3:4 (896x1200)' },
-    { value: '1264x848', label: '1K 3:2 (1264x848)' },
-    { value: '848x1264', label: '1K 2:3 (848x1264)' },
-    { value: '1152x928', label: '1K 5:4 (1152x928)' },
-    { value: '928x1152', label: '1K 4:5 (928x1152)' },
-    { value: '1584x672', label: '1K 21:9 (1584x672)' },
+    { value: 'auto_auto', label: '自适应 (auto)' },
+    { value: '1K_1:1', label: '1K 1:1 (1024x1024)' },
+    { value: '1K_16:9', label: '1K 16:9 (1376x768)' },
+    { value: '1K_9:16', label: '1K 9:16 (768x1376)' },
+    { value: '1K_4:3', label: '1K 4:3 (1200x896)' },
+    { value: '1K_3:4', label: '1K 3:4 (896x1200)' },
+    { value: '1K_3:2', label: '1K 3:2 (1264x848)' },
+    { value: '1K_2:3', label: '1K 2:3 (848x1264)' },
+    { value: '1K_5:4', label: '1K 5:4 (1152x928)' },
+    { value: '1K_4:5', label: '1K 4:5 (928x1152)' },
+    { value: '1K_21:9', label: '1K 21:9 (1584x672)' },
 
-    { value: '2048x2048', label: '2K 1:1 (2048x2048)' },
-    { value: '2752x1536', label: '2K 16:9 (2752x1536)' },
-    { value: '1536x2752', label: '2K 9:16 (1536x2752)' },
-    { value: '2400x1792', label: '2K 4:3 (2400x1792)' },
-    { value: '1792x2400', label: '2K 3:4 (1792x2400)' },
-    { value: '2528x1696', label: '2K 3:2 (2528x1696)' },
-    { value: '1696x2528', label: '2K 2:3 (1696x2528)' },
-    { value: '2304x1856', label: '2K 5:4 (2304x1856)' },
-    { value: '1856x2304', label: '2K 4:5 (1856x2304)' },
-    { value: '3168x1344', label: '2K 21:9 (3168x1344)' },
+    { value: '2K_1:1', label: '2K 1:1 (2048x2048)' },
+    { value: '2K_16:9', label: '2K 16:9 (2752x1536)' },
+    { value: '2K_9:16', label: '2K 9:16 (1536x2752)' },
+    { value: '2K_4:3', label: '2K 4:3 (2400x1792)' },
+    { value: '2K_3:4', label: '2K 3:4 (1792x2400)' },
+    { value: '2K_3:2', label: '2K 3:2 (2528x1696)' },
+    { value: '2K_2:3', label: '2K 2:3 (1696x2528)' },
+    { value: '2K_5:4', label: '2K 5:4 (2304x1856)' },
+    { value: '2K_4:5', label: '2K 4:5 (1856x2304)' },
+    { value: '2K_21:9', label: '2K 21:9 (3168x1344)' },
 
-    { value: '4096x4096', label: '4K 1:1 (4096x4096)' },
-    { value: '5504x3072', label: '4K 16:9 (5504x3072)' },
-    { value: '3072x5504', label: '4K 9:16 (3072x5504)' },
-    { value: '4800x3584', label: '4K 4:3 (4800x3584)' },
-    { value: '3584x4800', label: '4K 3:4 (3584x4800)' },
-    { value: '5056x3392', label: '4K 3:2 (5056x3392)' },
-    { value: '3392x5056', label: '4K 2:3 (3392x5056)' },
-    { value: '4608x3712', label: '4K 5:4 (4608x3712)' },
-    { value: '3712x4608', label: '4K 4:5 (3712x4608)' },
-    { value: '6336x2688', label: '4K 21:9 (6336x2688)' }
+    { value: '4K_1:1', label: '4K 1:1 (4096x4096)' },
+    { value: '4K_16:9', label: '4K 16:9 (5504x3072)' },
+    { value: '4K_9:16', label: '4K 9:16 (3072x5504)' },
+    { value: '4K_4:3', label: '4K 4:3 (4800x3584)' },
+    { value: '4K_3:4', label: '4K 3:4 (3584x4800)' },
+    { value: '4K_3:2', label: '4K 3:2 (5056x3392)' },
+    { value: '4K_2:3', label: '4K 2:3 (3392x5056)' },
+    { value: '4K_5:4', label: '4K 5:4 (4608x3712)' },
+    { value: '4K_4:5', label: '4K 4:5 (3712x4608)' },
+    { value: '4K_21:9', label: '4K 21:9 (6336x2688)' }
   ];
 
   const registry = [
