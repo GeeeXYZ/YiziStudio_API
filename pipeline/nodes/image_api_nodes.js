@@ -569,7 +569,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
 
 
 export async function executeNanobananaPreset(node, inputs, env, pool, orderContext, abortSignal) {
-  const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
+  const apiyiEndpoint = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
   const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
 
   if (!apiKey) throw new Error('ApiYi API Key not configured');
@@ -592,76 +592,116 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
     inputs.ref_images || node.data.ref_images || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
-  const hasReferenceImages = combined_images.length > 0;
-  let endpointUrl;
-  let reqBody;
-  let headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
+  // Parse Gemini size
+  function parseGeminiSize(sizeStr) {
+    if (!sizeStr || sizeStr === 'auto') return { aspectRatio: "1:1", imageSize: "1K" };
+    const [w, h] = sizeStr.split('x').map(Number);
+    if (!w || !h) return { aspectRatio: "1:1", imageSize: "1K" };
+    
+    const maxDim = Math.max(w, h);
+    let imageSize = '1K';
+    if (maxDim > 3000) imageSize = '4K';
+    else if (maxDim > 1600) imageSize = '2K';
+    else imageSize = '1K';
 
-  if (hasReferenceImages) {
-    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/edits`;
-    const fd = new FormData();
-    fd.append('model', modelId);
-    fd.append('prompt', prompt);
-    if (size && size !== 'auto') fd.append('size', size);
-
-    // Log all reference image URLs for debugging
-    console.log(`[NanoBanana] Reference images to fetch (${combined_images.length}):`, combined_images);
-
-    for (let i = 0; i < combined_images.length; i++) {
-      const imgUrl = combined_images[i];
-      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
-      console.log(`[NanoBanana] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
-      try {
-        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
-        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
-        const imgBlob = await imgRes.blob();
-        let ext = 'png';
-        if (imgBlob.type) {
-           if (imgBlob.type.includes('jpeg') || imgBlob.type.includes('jpg')) ext = 'jpg';
-           else if (imgBlob.type.includes('webp')) ext = 'webp';
-        }
-        fd.append('image', imgBlob, `image_${i}.${ext}`);
-      } catch (e) {
-        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
+    const ratio = w / h;
+    let aspectRatio = "1:1";
+    const standardRatios = {
+      "1:1": 1, "16:9": 16/9, "9:16": 9/16, "4:3": 4/3, "3:4": 3/4,
+      "3:2": 3/2, "2:3": 2/3, "5:4": 5/4, "4:5": 4/5, "21:9": 21/9
+    };
+    
+    let minDiff = Infinity;
+    for (const [key, val] of Object.entries(standardRatios)) {
+      const diff = Math.abs(ratio - val);
+      if (diff < minDiff) {
+        minDiff = diff;
+        aspectRatio = key;
       }
     }
-    reqBody = fd;
-  } else {
-    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
-    const payload = { model: modelId, prompt: prompt };
-    if (size && size !== 'auto') payload.size = size;
-    reqBody = JSON.stringify(payload);
-    headers['Content-Type'] = 'application/json';
+    return { aspectRatio, imageSize };
   }
 
-  console.log(`[NanoBanana] Request: endpoint=${endpointUrl} | model=${modelId} | size=${size} | images=${combined_images.length} | hasRefImages=${hasReferenceImages}`);
-  console.log(`[NanoBanana] Prompt (preview): ${String(prompt).substring(0, 200)}`);
-  console.log(`[NanoBanana] size from node.data.imageResolution = "${node.data.imageResolution}"`);
+  const { aspectRatio, imageSize } = parseGeminiSize(size);
+
+  const parts = [{ text: prompt }];
+
+  // Download reference images and convert to base64
+  if (combined_images.length > 0) {
+    for (let i = 0; i < combined_images.length; i++) {
+      const imgUrl = combined_images[i];
+      try {
+        let base64Data = "";
+        let mimeType = "image/jpeg";
+        if (imgUrl.startsWith('data:image')) {
+          const match = imgUrl.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+          if (match) {
+            mimeType = match[1];
+            base64Data = match[2];
+          }
+        } else {
+          const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
+          if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
+          const arrayBuffer = await imgRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          base64Data = buffer.toString('base64');
+          if (buffer[0] === 0xFF && buffer[1] === 0xD8) mimeType = "image/jpeg";
+          else if (buffer[0] === 0x89 && buffer[1] === 0x50) mimeType = "image/png";
+          else if (buffer[0] === 0x52 && buffer[1] === 0x49) mimeType = "image/webp";
+        }
+        if (base64Data) {
+          parts.push({ inlineData: { mimeType, data: base64Data } });
+        }
+      } catch (e) {
+        throw new Error(`NanoBanana failed to process reference image: ${e.message}`);
+      }
+    }
+  }
+
+  let baseUrl = apiyiEndpoint.trim().replace(/\/v1\/?$/, '').replace(/\/$/, '');
+  const endpointUrl = `${baseUrl}/v1beta/models/${modelId}:generateContent`;
+
+  const payload = {
+    contents: [{ parts }],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+      imageConfig: { aspectRatio, imageSize }
+    }
+  };
+
+  const headers = {
+    'Authorization': `Bearer ${apiKey.trim()}`,
+    'Content-Type': 'application/json'
+  };
+
+  console.log(`[NanoBanana] Request: endpoint=${endpointUrl} | model=${modelId} | imageConfig=${JSON.stringify(payload.generationConfig.imageConfig)}`);
 
   const res = await fetchWithRetry(endpointUrl, {
     method: 'POST',
     headers: headers,
-    body: reqBody,
+    body: JSON.stringify(payload),
     signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(360000)]) : AbortSignal.timeout(360000)
-  }, { noRetry: true }); // NEVER retry paid image generation API calls
+  }, { noRetry: true });
 
   if (!res.ok) {
     const errText = await res.text();
     console.error(`[NanoBanana] API Error Detail. Status: ${res.status}, Body: ${errText}, Prompt sent: ${prompt}`);
-    throw new Error(`ApiYi API error: [${res.status}] ${errText.substring(0, 1000)} (Prompt sent: ${String(prompt).substring(0, 50)}...)`);
+    throw new Error(`NanoBanana API error: [${res.status}] ${errText.substring(0, 1000)}`);
   }
 
   const data = await res.json();
-  const imageUrls = data.data?.map(img => {
-    if (img.url) return img.url;
-    if (img.b64_json) {
-      // APIYi b64_json already includes 'data:image/png;base64,' prefix
-      if (img.b64_json.startsWith('data:')) return img.b64_json;
-      return `data:image/png;base64,${img.b64_json}`;
+  
+  const imageUrls = [];
+  if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+    const candidateParts = data.candidates[0].content.parts;
+    for (const part of candidateParts) {
+      if (part.inlineData && part.inlineData.data) {
+        const mime = part.inlineData.mimeType || 'image/png';
+        imageUrls.push(`data:${mime};base64,${part.inlineData.data}`);
+      }
     }
-    return null;
-  }).filter(Boolean) || [];
+  }
 
-  if (imageUrls.length === 0) throw new Error(`ApiYi did not return any generated images.`);
+  if (imageUrls.length === 0) throw new Error(`NanoBanana did not return any generated images.`);
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
