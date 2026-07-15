@@ -227,7 +227,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'gpt-image-2-vip';
-  const size = node.data.imageResolution || 'auto';
+  const size = inputs.size || inputs.imageResolution || node.data.imageResolution || node.data.size || node.data.genSize || node.data.aspectRatio || 'auto';
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
