@@ -567,3 +567,101 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   throw lastError || new Error('Grok API failed after max retries');
 }
 
+
+export async function executeNanobananaPreset(node, inputs, env, pool, orderContext, abortSignal) {
+  const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
+  const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
+
+  if (!apiKey) throw new Error('ApiYi API Key not configured');
+
+  let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
+  if (Array.isArray(prompt)) {
+    prompt = prompt.map(p => typeof p === 'string' ? p : JSON.stringify(p)).filter(Boolean).join('\n');
+  } else if (typeof prompt === 'object') {
+    prompt = JSON.stringify(prompt);
+  }
+  prompt = String(prompt).trim();
+  if (!prompt) prompt = 'a beautiful image';
+  const modelId = node.data.modelId || 'gemini-3-pro-image-preview';
+  const size = inputs.size || inputs.imageResolution || node.data.imageResolution || node.data.size || node.data.genSize || node.data.aspectRatio || 'auto';
+
+  let combined_images = [
+    inputs.ref_image_1 || node.data.ref_image_1,
+    inputs.ref_image_2 || node.data.ref_image_2,
+    inputs.ref_image_3 || node.data.ref_image_3,
+    inputs.ref_images || node.data.ref_images || []
+  ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+
+  const hasReferenceImages = combined_images.length > 0;
+  let endpointUrl;
+  let reqBody;
+  let headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
+
+  if (hasReferenceImages) {
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+    const fd = new FormData();
+    fd.append('model', modelId);
+    fd.append('prompt', prompt);
+    if (size && size !== 'auto') fd.append('size', size);
+
+    // Log all reference image URLs for debugging
+    console.log(`[NanoBanana] Reference images to fetch (${combined_images.length}):`, combined_images);
+
+    for (let i = 0; i < combined_images.length; i++) {
+      const imgUrl = combined_images[i];
+      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
+      console.log(`[NanoBanana] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
+      try {
+        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
+        const imgBlob = await imgRes.blob();
+        let ext = 'png';
+        if (imgBlob.type) {
+           if (imgBlob.type.includes('jpeg') || imgBlob.type.includes('jpg')) ext = 'jpg';
+           else if (imgBlob.type.includes('webp')) ext = 'webp';
+        }
+        fd.append('image', imgBlob, `image_${i}.${ext}`);
+      } catch (e) {
+        throw new Error(`ApiYi failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
+      }
+    }
+    reqBody = fd;
+  } else {
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+    const payload = { model: modelId, prompt: prompt };
+    if (size && size !== 'auto') payload.size = size;
+    reqBody = JSON.stringify(payload);
+    headers['Content-Type'] = 'application/json';
+  }
+
+  console.log(`[NanoBanana] Request: endpoint=${endpointUrl} | model=${modelId} | size=${size} | images=${combined_images.length} | hasRefImages=${hasReferenceImages}`);
+  console.log(`[NanoBanana] Prompt (preview): ${String(prompt).substring(0, 200)}`);
+  console.log(`[NanoBanana] size from node.data.imageResolution = "${node.data.imageResolution}"`);
+
+  const res = await fetchWithRetry(endpointUrl, {
+    method: 'POST',
+    headers: headers,
+    body: reqBody,
+    signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(360000)]) : AbortSignal.timeout(360000)
+  }, { noRetry: true }); // NEVER retry paid image generation API calls
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error(`[NanoBanana] API Error Detail. Status: ${res.status}, Body: ${errText}, Prompt sent: ${prompt}`);
+    throw new Error(`ApiYi API error: [${res.status}] ${errText.substring(0, 1000)} (Prompt sent: ${String(prompt).substring(0, 50)}...)`);
+  }
+
+  const data = await res.json();
+  const imageUrls = data.data?.map(img => {
+    if (img.url) return img.url;
+    if (img.b64_json) {
+      // APIYi b64_json already includes 'data:image/png;base64,' prefix
+      if (img.b64_json.startsWith('data:')) return img.b64_json;
+      return `data:image/png;base64,${img.b64_json}`;
+    }
+    return null;
+  }).filter(Boolean) || [];
+
+  if (imageUrls.length === 0) throw new Error(`ApiYi did not return any generated images.`);
+  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
+}
