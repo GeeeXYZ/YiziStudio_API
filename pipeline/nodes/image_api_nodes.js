@@ -227,7 +227,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'gpt-image-2-vip';
-  const size = inputs.size || inputs.imageResolution || node.data.imageResolution || node.data.size || node.data.genSize || node.data.aspectRatio || 'auto';
+  const size = node.data.imageResolution || '1024x1024';
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
@@ -337,7 +337,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
     model: node.data.modelId || node.data.model || 'gpt-image-2',
     prompt: prompt,
     images: combined_images,
-    aspectRatio: node.data.genSize || node.data.resolution || '1024x1024',
+    aspectRatio: node.data.genSize || '1024x1024',
     quality: node.data.genQuality || 'standard',
     replyType: 'async'
   };
@@ -583,7 +583,7 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
   const modelId = node.data.modelId || 'gemini-3-pro-image-preview';
-  const size = inputs.size || inputs.imageResolution || node.data.imageResolution || node.data.size || node.data.genSize || node.data.aspectRatio || 'auto';
+  const size = node.data.imageResolution || '1024x1024';
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,

@@ -9,6 +9,48 @@ const router = express.Router();
 
 global.visionTasks = global.visionTasks || {};
 
+/**
+ * Schema 适配器：根据节点类型，将 Toolkit 传入的统一尺寸值
+ * 精准翻译为该类型节点 Vue 组件所对应的 node.data 字段格式。
+ * 消除 Toolkit 与底层执行器之间的 Schema 契约断裂。
+ */
+function buildNodeDataForType(type, sizeValue) {
+  if (!sizeValue) sizeValue = '1024x1024';
+
+  switch (type) {
+    case 'preset_apiyi':
+    case 'preset_nanobanana':
+      // 对应 ApiyiPresetNode.vue / NanobananaPresetNode.vue 的 v-model="localData.imageResolution"
+      return { imageResolution: sizeValue };
+
+    case 'preset_grsai':
+      // 对应 GrsaiPresetNode.vue 的 v-model="localData.genSize"
+      return { genSize: sizeValue };
+
+    case 'seedream':
+    case 'preset_seedream':
+      // 对应 SeedreamNode.vue 的 v-model="localData.size"
+      return { size: sizeValue };
+
+    case 'preset_openrouter':
+      // 对应 OpenRouterPresetNode.vue 的 aspectRatio + imageResolution 两个独立字段
+      return {
+        imageResolution: sizeValue.includes('_') ? sizeValue.split('_')[0] : '2K',
+        aspectRatio: sizeValue.includes('_') ? sizeValue.split('_')[1] : sizeValue
+      };
+
+    case 'grok_imagine':
+      // 对应 GrokImagineNode.vue 的 resolution + aspectRatio 两个独立字段
+      return {
+        resolution: sizeValue.includes('_') ? sizeValue.split('_')[0] : '2k',
+        aspectRatio: sizeValue.includes('_') ? sizeValue.split('_')[1] : sizeValue
+      };
+
+    default:
+      return {};
+  }
+}
+
 // GET /toolkit/prompts/history — Read logged-in admin's prompt history
 router.get('/toolkit/prompts/history', authenticateToken, async (req, res) => {
   try {
@@ -513,11 +555,8 @@ router.post('/toolkit/vision_api/execute', authenticateToken, async (req, res) =
         modelId: model,
         model: model,
         prompt: prompt,
-        genSize: aspectRatio,
-        resolution: nodeType === 'grok_imagine' ? (aspectRatio.includes('_') ? aspectRatio.split('_')[0] : '2k') : aspectRatio,
-        aspectRatio: nodeType === 'grok_imagine' ? (aspectRatio.includes('_') ? aspectRatio.split('_')[1] : aspectRatio) : aspectRatio,
         genQuality: quality,
-        size: aspectRatio // For Seedream
+        ...buildNodeDataForType(nodeType, aspectRatio)
       }
     };
     
@@ -664,11 +703,8 @@ router.post('/toolkit/vision_api/execute_async', authenticateToken, async (req, 
         modelId: model,
         model: model,
         prompt: prompt,
-        genSize: aspectRatio,
-        resolution: nodeType === 'grok_imagine' ? (aspectRatio.includes('_') ? aspectRatio.split('_')[0] : '2k') : aspectRatio,
-        aspectRatio: nodeType === 'grok_imagine' ? (aspectRatio.includes('_') ? aspectRatio.split('_')[1] : aspectRatio) : aspectRatio,
         genQuality: quality,
-        size: aspectRatio // For Seedream
+        ...buildNodeDataForType(nodeType, aspectRatio)
       }
     };
     
