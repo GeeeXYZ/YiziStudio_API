@@ -779,11 +779,7 @@ router.post('/client/order/confirm', authenticateToken, async (req, res) => {
       [JSON.stringify(orderData), completed, id]
     );
 
-    // 5) Trigger SSE to refresh the user's view
-    orderEventEmitter.emit(`orderUpdate:${req.user.unionid}`, { 
-      orderId: id, 
-      event: 'ORDER_CONFIRMED' 
-    });
+
 
     // Trigger Feishu Notification only when the entire order is fully confirmed for the first time
     if (completed === '1' && !wasCompleted) {
