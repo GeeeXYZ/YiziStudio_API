@@ -288,7 +288,7 @@ ${constraints || 'Make them distinct and highly detailed.'}`;
           { role: 'user', content: [{type: 'input_text', text: userContent}] }
         ]
       }),
-      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000)
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
     });
   } else {
     let endpoint = llmUrl;
@@ -305,7 +305,7 @@ ${constraints || 'Make them distinct and highly detailed.'}`;
           { role: 'user', content: userContent }
         ]
       }),
-      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000)
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)
     });
   }
 
