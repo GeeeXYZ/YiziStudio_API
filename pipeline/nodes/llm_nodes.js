@@ -260,16 +260,17 @@ export async function executeLlmPromptFission(node, inputs, env, pool, abortSign
 
   // User-provided system prompt from upstream node, merged with fission instructions
   const userSystemPrompt = inputs.system_prompt || '';
-  const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} distinct variations.
+  const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} HIGHLY DISTINCT variations.
+CRITICAL RULE: Each variation must be radically different in concept, angle, style, or composition. DO NOT just change a few words. Maximize the creative variance between each option!
 You MUST output your response strictly as a JSON array of ${fissionCount} strings. Do not use markdown wrappers like \`\`\`json.
 Example output format:
-["variation 1 text", "variation 2 text", "variation 3 text"]`;
+["highly unique variation 1 text", "completely different variation 2 text", "another distinct variation 3 text"]`;
 
   const systemPrompt = userSystemPrompt
     ? `${userSystemPrompt}\n\n--- Fission Output Rules ---${fissionInstruction}`
     : `You are an expert prompt engineer.\nYour task is to take a base prompt and generate exactly ${fissionCount} distinct variations based on the user's base prompt and any constraints provided.${fissionInstruction}`;
 
-  const userContent = `Base Prompt:\n${basePrompt}\n\nConstraints:\n${constraints || 'Make them distinct and highly detailed.'}`;
+  const userContent = `Base Prompt:\n${basePrompt}\n\nConstraints:\n${constraints || 'Ensure maximum diversity, radically different concepts, and highly detailed descriptions.'}`;
 
   let apiFormat = (llmUrl.includes('volces.com') || llmUrl.includes('volcengine')) ? 'doubao' : 'openai';
 
