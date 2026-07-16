@@ -252,23 +252,24 @@ export async function executeLlmPromptFission(node, inputs, env, pool, abortSign
 
   const fissionCount = parseInt(node.data.fission_count) || 4;
   const constraints = node.data.constraints || '';
-  const basePrompt = inputs.input || '';
+  const basePrompt = inputs.prompt || inputs.input || '';
 
   if (!basePrompt) {
-    throw new Error('LLM Skill Node requires a base prompt (input) to perform fission.');
+    throw new Error('LLM Skill Node requires a base prompt (prompt) to perform fission.');
   }
 
-  const systemPrompt = `You are an expert prompt engineer.
-Your task is to take a base prompt and generate exactly ${fissionCount} distinct variations based on the user's base prompt and any constraints provided.
-You MUST output your response strictly as a JSON array of strings. Do not use markdown wrappers like \`\`\`json.
+  // User-provided system prompt from upstream node, merged with fission instructions
+  const userSystemPrompt = inputs.system_prompt || '';
+  const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} distinct variations.
+You MUST output your response strictly as a JSON array of ${fissionCount} strings. Do not use markdown wrappers like \`\`\`json.
 Example output format:
 ["variation 1 text", "variation 2 text", "variation 3 text"]`;
 
-  const userContent = `Base Prompt:
-${basePrompt}
+  const systemPrompt = userSystemPrompt
+    ? `${userSystemPrompt}\n\n--- Fission Output Rules ---${fissionInstruction}`
+    : `You are an expert prompt engineer.\nYour task is to take a base prompt and generate exactly ${fissionCount} distinct variations based on the user's base prompt and any constraints provided.${fissionInstruction}`;
 
-Constraints:
-${constraints || 'Make them distinct and highly detailed.'}`;
+  const userContent = `Base Prompt:\n${basePrompt}\n\nConstraints:\n${constraints || 'Make them distinct and highly detailed.'}`;
 
   let apiFormat = (llmUrl.includes('volces.com') || llmUrl.includes('volcengine')) ? 'doubao' : 'openai';
 
