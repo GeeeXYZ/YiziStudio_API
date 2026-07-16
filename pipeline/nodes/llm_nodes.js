@@ -258,27 +258,15 @@ export async function executeLlmPromptFission(node, inputs, env, pool, abortSign
     throw new Error('LLM Skill Node requires a base prompt (prompt) to perform fission.');
   }
 
-  const varianceLevel = node.data.variance_level || 'balanced';
-  let varianceText = '';
-  switch (varianceLevel) {
-    case 'conservative':
-      varianceText = `CRITICAL RULE: Each variation must maintain the exact same core concept and subject. Only make minor modifications to wording, synonyms, and slight stylistic nuances. Keep them highly conservative and similar to the base.`;
-      break;
-    case 'balanced':
-      varianceText = `CRITICAL RULE: Retain the core subject but alter the angles, lighting, clothing details, or composition. Provide moderate but noticeable differences.`;
-      break;
-    case 'wild':
-      varianceText = `CRITICAL RULE: Each variation must be radically different in concept, angle, style, or composition. DO NOT just change a few words. Maximize the creative variance between each option! Break boundaries!`;
-      break;
-  }
-
   // User-provided system prompt from upstream node, merged with fission instructions
   const userSystemPrompt = inputs.system_prompt || '';
-  const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} distinct variations.
-${varianceText}
+  const diversityPrompt = node.data.diversity_prompt || 'Each variation must be radically different in concept, angle, style, or composition. DO NOT just change a few words. Maximize the creative variance between each option!';
+  
+  const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} HIGHLY DISTINCT variations.
+CRITICAL RULE: ${diversityPrompt}
 You MUST output your response strictly as a JSON array of ${fissionCount} strings. Do not use markdown wrappers like \`\`\`json.
 Example output format:
-["variation 1 text", "variation 2 text", "variation 3 text"]`;
+["highly unique variation 1 text", "completely different variation 2 text", "another distinct variation 3 text"]`;
 
   const systemPrompt = userSystemPrompt
     ? `${userSystemPrompt}\n\n--- Fission Output Rules ---${fissionInstruction}`
