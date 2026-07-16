@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { orderEventEmitter } from '../events.js';
 import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
 import { executeToolkitInput, executeOrderInput, executeFloatInput } from './nodes/input_nodes.js';
-import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary } from './nodes/llm_nodes.js';
+import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary, executeLlmPromptFission } from './nodes/llm_nodes.js';
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
 import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset, executeGrokImagine, executeNanobananaPreset } from './nodes/image_api_nodes.js';
 import { executeOssOutput } from './nodes/output_nodes.js';
@@ -65,6 +65,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'prompt_board': return await executePromptBoard(node, inputs, orderContext);
     case 'string_concat': return await executeStringConcat(node, inputs);
     case 'llm_call': return await executeLlmCall(node, inputs, env, pool, abortSignal);
+    case 'llm_prompt_fission': return await executeLlmPromptFission(node, inputs, env, pool, abortSignal);
     case 'prompt_library': return await executePromptLibrary(node, inputs, pool, executionState);
     
     case 'image_preview': return await executeImagePreview(node, inputs);

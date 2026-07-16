@@ -240,3 +240,109 @@ export async function executePromptLibrary(node, inputs, pool, executionState) {
     preview_img: selectedPreviewImg 
   };
 }
+
+export async function executeLlmPromptFission(node, inputs, env, pool, abortSignal) {
+  const { getSetting } = await import('../../config_manager.js');
+  
+  const llmUrl = env?.LLM_API_URL || await getSetting(pool, 'LLM_API_URL') || 'https://api.openai.com/v1';
+  const llmKey = env?.LLM_API_KEY || await getSetting(pool, 'LLM_API_KEY') || '';
+  const llmModel = env?.LLM_API_MODEL || await getSetting(pool, 'LLM_API_MODEL') || 'gpt-4o-mini';
+  
+  if (!llmKey) throw new Error('LLM Node missing API Key.');
+
+  const fissionCount = parseInt(node.data.fission_count) || 4;
+  const constraints = node.data.constraints || '';
+  const basePrompt = inputs.input || '';
+
+  if (!basePrompt) {
+    throw new Error('LLM Skill Node requires a base prompt (input) to perform fission.');
+  }
+
+  const systemPrompt = `You are an expert prompt engineer.
+Your task is to take a base prompt and generate exactly ${fissionCount} distinct variations based on the user's base prompt and any constraints provided.
+You MUST output your response strictly as a JSON array of strings. Do not use markdown wrappers like \`\`\`json.
+Example output format:
+["variation 1 text", "variation 2 text", "variation 3 text"]`;
+
+  const userContent = `Base Prompt:
+${basePrompt}
+
+Constraints:
+${constraints || 'Make them distinct and highly detailed.'}`;
+
+  let apiFormat = (llmUrl.includes('volces.com') || llmUrl.includes('volcengine')) ? 'doubao' : 'openai';
+
+  let chatRes;
+  if (apiFormat === 'doubao') {
+    let doubaoEndpoint = llmUrl;
+    if (!doubaoEndpoint.endsWith('/responses')) {
+      doubaoEndpoint = doubaoEndpoint.replace(/\/+$/, '') + '/responses';
+    }
+    chatRes = await fetch(doubaoEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
+      body: JSON.stringify({
+        model: llmModel,
+        input: [
+          { role: 'system', content: [{type: 'input_text', text: systemPrompt}] },
+          { role: 'user', content: [{type: 'input_text', text: userContent}] }
+        ]
+      }),
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000)
+    });
+  } else {
+    let endpoint = llmUrl;
+    if (!endpoint.endsWith('/chat/completions')) {
+      endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
+    }
+    chatRes = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmKey}` },
+      body: JSON.stringify({
+        model: llmModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent }
+        ]
+      }),
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000)
+    });
+  }
+
+  if (!chatRes.ok) {
+    const errText = await chatRes.text();
+    throw new Error(`LLM API Error ${chatRes.status}: ${errText}`);
+  }
+
+  const data = await chatRes.json();
+  let textOutput = '';
+  
+  if (apiFormat === 'doubao') {
+    textOutput = data.data?.content || data.choices?.[0]?.message?.content || '';
+  } else {
+    textOutput = data.choices?.[0]?.message?.content || '';
+  }
+
+  if (!textOutput) throw new Error('LLM returned empty output');
+
+  textOutput = textOutput.replace(/^```json/i, '').replace(/```$/, '').trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(textOutput);
+    if (!Array.isArray(parsed)) {
+      if (parsed.variations && Array.isArray(parsed.variations)) parsed = parsed.variations;
+      else parsed = [textOutput];
+    }
+  } catch (e) {
+    console.error('Failed to parse LLM JSON:', textOutput);
+    parsed = textOutput.split('\n').map(s => s.trim().replace(/^[-*0-9.]+\s*/, '')).filter(Boolean);
+  }
+
+  const results = {};
+  for (let i = 0; i < fissionCount; i++) {
+    results[`output_${i + 1}`] = parsed[i] || parsed[0] || basePrompt;
+  }
+  
+  return results;
+}
