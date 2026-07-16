@@ -260,7 +260,7 @@ export async function executeLlmPromptFission(node, inputs, env, pool, abortSign
 
   // User-provided system prompt from upstream node, merged with fission instructions
   const userSystemPrompt = inputs.system_prompt || '';
-  const diversityPrompt = node.data.diversity_prompt || 'Each variation must be radically different in concept, angle, style, or composition. DO NOT just change a few words. Maximize the creative variance between each option!';
+  const diversityPrompt = node.data.diversity_prompt || '每个变体必须在概念、视角、风格或构图上具有极大的差异。绝对不要只改几个词，请最大化每组选项之间的创意反差！';
   
   const fissionInstruction = `\nYou MUST generate exactly ${fissionCount} HIGHLY DISTINCT variations.
 CRITICAL RULE: ${diversityPrompt}
