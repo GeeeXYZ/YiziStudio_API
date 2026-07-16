@@ -316,15 +316,26 @@ Example output format:
   }
 
   const data = await chatRes.json();
-  let textOutput = '';
   
+  if (data.error) {
+    throw new Error(`LLM API returned error: ${data.error.message || JSON.stringify(data.error)}`);
+  }
+
+  let textOutput = '';
   if (apiFormat === 'doubao') {
     textOutput = data.data?.content || data.choices?.[0]?.message?.content || '';
   } else {
     textOutput = data.choices?.[0]?.message?.content || '';
   }
 
-  if (!textOutput) throw new Error('LLM returned empty output');
+  if (!textOutput) {
+    console.error(`[LLM Fission] Empty output from LLM. Raw response:`, JSON.stringify(data, null, 2));
+    const finishReason = data.choices?.[0]?.finish_reason;
+    if (finishReason === 'content_filter') {
+      throw new Error('LLM blocked the generation due to safety/content filters.');
+    }
+    throw new Error(`LLM returned empty output. Raw response: ${JSON.stringify(data).substring(0, 200)}`);
+  }
 
   textOutput = textOutput.replace(/^```json/i, '').replace(/```$/, '').trim();
 
