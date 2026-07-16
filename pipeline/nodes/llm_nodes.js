@@ -323,7 +323,20 @@ Example output format:
 
   let textOutput = '';
   if (apiFormat === 'doubao') {
-    textOutput = data.data?.content || data.choices?.[0]?.message?.content || '';
+    if (data.output && Array.isArray(data.output)) {
+      for (const item of data.output) {
+        if (item.type === 'message' && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === 'output_text' && part.text) {
+              textOutput += part.text;
+            }
+          }
+        }
+      }
+    }
+    if (!textOutput && data.choices) {
+      textOutput = data.choices?.[0]?.message?.content || '';
+    }
   } else {
     textOutput = data.choices?.[0]?.message?.content || '';
   }
