@@ -410,8 +410,36 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
 // Simulate Pipeline Execution (Dry Run)
 router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
   try {
-    const { workflow_json, sku_id, model_uuid, prompt_slots, user_prompt, user_images, model_name } = req.body;
+    let { workflow_json, sku_id, model_uuid, prompt_slots, user_prompt, user_images, model_name, order_id } = req.body;
     if (!workflow_json) return res.status(400).json({ error: 'Missing workflow_json' });
+
+    let orderDbData = null;
+    let actualOpenId = 'test_user';
+    if (order_id) {
+      const orderRes = await pool.query('SELECT * FROM "yizi_orders" WHERE id = $1', [order_id]);
+      if (orderRes.rows.length > 0) {
+        orderDbData = typeof orderRes.rows[0].data === 'string' ? JSON.parse(orderRes.rows[0].data) : (orderRes.rows[0].data || {});
+        actualOpenId = orderRes.rows[0].openid;
+        
+        model_uuid = model_uuid || orderDbData.model_uuid || '';
+        model_name = model_name || orderDbData.model_name || '';
+        user_prompt = user_prompt || orderDbData.prompt || '';
+        sku_id = sku_id || orderDbData.planId || '';
+        
+        const setIndex = 0;
+        if (orderDbData.sets && orderDbData.sets[setIndex]) {
+          user_images = (user_images && user_images.length) ? user_images : (orderDbData.sets[setIndex].images || []);
+          const storedSlots = orderDbData.sets[setIndex].prompt_slots || orderDbData.prompt_slots || [];
+          if (!prompt_slots) prompt_slots = [];
+          for (let i = 0; i < 4; i++) {
+            if (!prompt_slots[i]) prompt_slots[i] = { content: '' };
+            if (!prompt_slots[i].content && storedSlots[i]?.content) {
+              prompt_slots[i].content = storedSlots[i].content;
+            }
+          }
+        }
+      }
+    }
 
     let skuData = {};
     if (sku_id) {
@@ -449,7 +477,8 @@ router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
 
     const orderContext = {
       isRealOrder: false,
-      order_id: 'test_order_' + Date.now(),
+      order_id: order_id || ('test_order_' + Date.now()),
+      openid: actualOpenId,
       model_uuid: model_uuid || '',
       images: user_images || [],
       prompt: user_prompt || '',
