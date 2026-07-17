@@ -3,7 +3,11 @@ import jwt from 'jsonwebtoken';
 // Middleware for auth
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+  let token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+  
+  if (token === 'null' || token === 'undefined') {
+    token = null;
+  }
   
   const isPublic = req.path.includes('/client/model/list') || req.path.includes('/client/template/list') || req.path.includes('/client/tag/list') || req.path.includes('/client/sku/list');
 
