@@ -127,7 +127,7 @@ export async function executeComfyRemote(node, inputs, orderContext, env, pool, 
       method: 'POST',
       headers: fetchHeaders,
       body: JSON.stringify(promptPayload),
-      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)
+      signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(100000)]) : AbortSignal.timeout(100000)
     }, { maxRetries: 3, baseDelayMs: 2000 });
   } catch (fetchErr) {
     throw new Error(`无法连接到 ComfyUI 服务 (${comfyuiServerUrl}): ${fetchErr.message}`);
