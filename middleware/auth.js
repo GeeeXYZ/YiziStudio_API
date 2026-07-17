@@ -5,7 +5,7 @@ const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
   
-  const isPublic = req.path.includes('/client/model/list') || req.path.includes('/client/template/list') || req.path.includes('/client/tag/list');
+  const isPublic = req.path.includes('/client/model/list') || req.path.includes('/client/template/list') || req.path.includes('/client/tag/list') || req.path.includes('/client/sku/list');
 
   if (!token) {
     if (isPublic) {
