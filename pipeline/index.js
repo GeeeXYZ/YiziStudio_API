@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { orderEventEmitter } from '../events.js';
 import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
-import { executeToolkitInput, executeOrderInput, executeFloatInput } from './nodes/input_nodes.js';
+import { executeToolkitInput, executeOrderInput, executeFloatInput, executeImageInput } from './nodes/input_nodes.js';
 import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary, executeLlmPromptFission } from './nodes/llm_nodes.js';
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
 import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset, executeGrokImagine, executeNanobananaPreset } from './nodes/image_api_nodes.js';
@@ -61,6 +61,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'grok_imagine': return await executeGrokImagine(node, inputs, env, pool, abortSignal);
     
     case 'text_input': return await executeTextInput(node, inputs);
+    case 'image_input': return await executeImageInput(node, inputs);
     case 'float_input': return await executeFloatInput(node, inputs);
     case 'prompt_board': return await executePromptBoard(node, inputs, orderContext);
     case 'string_concat': return await executeStringConcat(node, inputs);
@@ -155,7 +156,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           preset_seedream: '引擎生图', preset_apiyi: '引擎生图', preset_nanobanana: 'NanoBanana生图',
           preset_grsai: '大模型生图推理', comfy_remote: '投递到远程工作流',
           oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
-          prompt_board: '构建提示词', text_input: '读取配置', image_preview: '获取图像', text_preview: '获取文本',
+          prompt_board: '提示词板', text_input: '文本输入', image_input: '图片输入', image_preview: '图片预览', text_preview: '文本预览',
           string_concat: '文本拼接', llm_call: '大模型调用', http_request: 'HTTP 请求',
           seedream: '即梦生图', preset_openrouter: '大模型绘图', grok_imagine: 'Grok Imagine 推理'
         };

@@ -91,3 +91,13 @@ export async function executeFloatInput(node, inputs) {
     output: Number(val.toFixed(2))
   };
 }
+
+export async function executeImageInput(node, inputs) {
+  let url = node.data?.imageUrl || '';
+  if (Array.isArray(url)) {
+    url = url[0] || '';
+  }
+  return {
+    output: url
+  };
+}
