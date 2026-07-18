@@ -128,7 +128,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
 
   const RATIO_TO_SIZE = { '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536', '4:3': '1536x1024', '3:4': '1024x1536', '16:9': '1792x1024', '9:16': '1024x1792' };
   const RATIO_TO_SIZE_2K = { '1:1': '2048x2048', '3:2': '2048x1536', '2:3': '1536x2048', '4:3': '2048x1536', '3:4': '1536x2048', '16:9': '2048x1152', '9:16': '1152x2048' };
-  const RATIO_TO_SIZE_4K = { '1:1': '4096x4096', '3:4': '3520x4704', '4:3': '4704x3520', '16:9': '5504x3040', '9:16': '3040x5504', '2:3': '3328x4992', '3:2': '4992x3328', '21:9': '6240x2656' };
+  const RATIO_TO_SIZE_4K = { '1:1': '2880x2880', '3:4': '2496x3312', '4:3': '3312x2496', '16:9': '3840x2160', '9:16': '2160x3840', '2:3': '2352x3520', '3:2': '3520x2352', '21:9': '3840x1648' };
 
   let mappedSize = RATIO_TO_SIZE;
   if (imageResolution === '2K') mappedSize = RATIO_TO_SIZE_2K;
@@ -150,6 +150,12 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
     if (imageResolution) payload.image_config.image_size = imageResolution;
   }
   if (resolvedSize) payload.size = resolvedSize;
+
+  // quality: auto | low | medium | high (OpenRouter gpt-image-2 parameter)
+  const quality = node.data.genQuality || inputs.quality;
+  if (quality && ['auto', 'low', 'medium', 'high'].includes(quality)) {
+    payload.quality = quality;
+  }
 
   const res = await fetchWithRetry(endpoint, {
     method: 'POST',
@@ -247,6 +253,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
     fd.append('model', modelId);
     fd.append('prompt', prompt);
     if (size && size !== 'auto') fd.append('size', size);
+    fd.append('response_format', 'url');
 
     // Log all reference image URLs for debugging
     console.log(`[ApiYi] Reference images to fetch (${combined_images.length}):`, combined_images);
@@ -272,7 +279,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
     reqBody = fd;
   } else {
     endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
-    const payload = { model: modelId, prompt: prompt };
+    const payload = { model: modelId, prompt: prompt, response_format: 'url' };
     if (size && size !== 'auto') payload.size = size;
     reqBody = JSON.stringify(payload);
     headers['Content-Type'] = 'application/json';
