@@ -736,7 +736,7 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
     size = node.data.imageResolution || 'auto';
   }
 
-  const quality = inputs.quality || node.data.quality || 'standard';
+  const quality = inputs.quality || node.data.quality || 'auto';
 
   let combined_images = [
     inputs.image_1 || node.data.image_1,
