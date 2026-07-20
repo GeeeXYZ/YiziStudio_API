@@ -709,3 +709,140 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   if (imageUrls.length === 0) throw new Error(`NanoBanana (Gemini) did not return any generated images.`);
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
+
+export async function executeApiyiGptImage2(node, inputs, env, pool, orderContext, abortSignal) {
+  const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
+  const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
+
+  if (!apiKey) throw new Error('ApiYi API Key not configured');
+
+  let prompt = inputs.prompt || node.data.prompt || '';
+  if (Array.isArray(prompt)) {
+    prompt = prompt.map(p => typeof p === 'string' ? p : JSON.stringify(p)).filter(Boolean).join('\n');
+  } else if (typeof prompt === 'object') {
+    prompt = JSON.stringify(prompt);
+  }
+  prompt = String(prompt).trim();
+  if (!prompt) prompt = 'a beautiful image';
+
+  const modelId = node.data.modelId || 'gpt-image-2-vip';
+  
+  // Resolution parsing
+  let size = '1024x1024';
+  if (node.data.sizeMode === 'custom') {
+    const w = parseInt(node.data.customWidth) || 2048;
+    const h = parseInt(node.data.customHeight) || 2048;
+    size = `${w}x${h}`;
+  } else {
+    size = node.data.imageResolution || 'auto';
+  }
+
+  let combined_images = [
+    inputs.image_1 || node.data.image_1,
+    inputs.image_2 || node.data.image_2,
+    inputs.image_3 || node.data.image_3,
+    inputs.images_array || node.data.images_array || []
+  ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+
+  // Limit to 16 images per API specification
+  if (combined_images.length > 16) {
+    console.log(`[ApiYi GPT-Image-2] Warning: Truncating reference images from ${combined_images.length} to 16`);
+    combined_images = combined_images.slice(0, 16);
+  }
+
+  const mask_image = inputs.mask || node.data.mask || null;
+  const hasReferenceImages = combined_images.length > 0;
+  
+  let endpointUrl;
+  let reqBody;
+  let headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
+
+  if (hasReferenceImages) {
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+    const fd = new FormData();
+    fd.append('model', modelId);
+    fd.append('prompt', prompt);
+    if (size && size !== 'auto') fd.append('size', size);
+    fd.append('response_format', 'url');
+
+    console.log(`[ApiYi GPT-Image-2] Reference images to fetch (${combined_images.length}):`, combined_images);
+
+    for (let i = 0; i < combined_images.length; i++) {
+      const imgUrl = combined_images[i];
+      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
+      console.log(`[ApiYi GPT-Image-2] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
+      try {
+        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
+        const imgBlob = await imgRes.blob();
+        let ext = 'png';
+        if (imgBlob.type) {
+           if (imgBlob.type.includes('jpeg') || imgBlob.type.includes('jpg')) ext = 'jpg';
+           else if (imgBlob.type.includes('webp')) ext = 'webp';
+        }
+        fd.append('image', imgBlob, `image_${i}.${ext}`);
+      } catch (e) {
+        throw new Error(`ApiYi GPT-Image-2 failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
+      }
+    }
+    
+    if (mask_image && typeof mask_image === 'string') {
+        console.log(`[ApiYi GPT-Image-2] Fetching mask image: ${mask_image.substring(0, 50)}...`);
+        try {
+            const maskRes = await fetchWithRetry(mask_image, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
+            if (!maskRes.ok) throw new Error(`HTTP ${maskRes.status}`);
+            const maskBlob = await maskRes.blob();
+            fd.append('mask', maskBlob, `mask.png`);
+        } catch(e) {
+            console.error(`[ApiYi GPT-Image-2] Warning: failed to fetch mask image: ${e.message}`);
+        }
+    }
+    
+    reqBody = fd;
+  } else {
+    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+    const payload = {
+      model: modelId,
+      prompt: prompt,
+      n: 1,
+      response_format: 'url'
+    };
+    if (size && size !== 'auto') payload.size = size;
+    reqBody = JSON.stringify(payload);
+    headers['Content-Type'] = 'application/json';
+  }
+
+  console.log(`[ApiYi GPT-Image-2] Executing ${hasReferenceImages ? 'image edits' : 'image generations'} via ${endpointUrl}`);
+  
+  const response = await fetchWithRetry(endpointUrl, {
+    method: 'POST',
+    headers: headers,
+    body: reqBody,
+    signal: abortSignal
+  });
+
+  const responseText = await response.text();
+  let responseData;
+  try {
+    responseData = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error(`ApiYi API returned non-JSON response: ${responseText.substring(0, 200)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`ApiYi API error: [${response.status}] ${JSON.stringify(responseData)}`);
+  }
+
+  if (!responseData.data || !Array.isArray(responseData.data) || responseData.data.length === 0) {
+    throw new Error(`ApiYi API returned empty data: ${JSON.stringify(responseData)}`);
+  }
+
+  const generatedUrls = responseData.data.map(item => item.url || item.b64_json).filter(Boolean);
+  if (generatedUrls.length === 0) {
+    throw new Error(`ApiYi API returned data without urls: ${JSON.stringify(responseData)}`);
+  }
+  
+  console.log(`[ApiYi GPT-Image-2] Successfully generated ${generatedUrls.length} images`);
+
+  return { output: generatedUrls };
+}

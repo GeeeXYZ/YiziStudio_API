@@ -4,7 +4,7 @@ import { buildGraph, topoSort, resolveInputs } from './core/dag_resolver.js';
 import { executeToolkitInput, executeOrderInput, executeFloatInput, executeImageInput } from './nodes/input_nodes.js';
 import { executeTextInput, executePromptBoard, executeStringConcat, executeLlmCall, executePromptLibrary, executeLlmPromptFission } from './nodes/llm_nodes.js';
 import { executeComfyRemote } from './nodes/comfyui_nodes.js';
-import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRouterPreset, executeGrokImagine, executeNanobananaPreset } from './nodes/image_api_nodes.js';
+import { executeSeedream, executeApiyiPreset, executeApiyiGptImage2, executeGrsaiPreset, executeOpenRouterPreset, executeGrokImagine, executeNanobananaPreset } from './nodes/image_api_nodes.js';
 import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { executeColorGrading } from './nodes/color_grading_node.js';
@@ -57,6 +57,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'seedream': return await executeSeedream(node, inputs, env, pool, abortSignal);
     
     case 'preset_apiyi': return await executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal);
+    case 'apiyi_gpt_image2': return await executeApiyiGptImage2(node, inputs, env, pool, orderContext, abortSignal);
     case 'preset_nanobanana': return await executeNanobananaPreset(node, inputs, env, pool, orderContext, abortSignal);
     case 'preset_grsai': return await executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal);
     case 'preset_openrouter': return await executeOpenRouterPreset(node, inputs, env, pool, orderContext, abortSignal);
