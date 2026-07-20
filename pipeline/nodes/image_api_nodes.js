@@ -713,12 +713,34 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   return { output_images: imageUrls, output: imageUrls, images: imageUrls };
 }
 
+/**
+ * ApiYi GPT-Image-2 节点 — 独立实现，与旧版 executeApiyiPreset 无任何耦合
+ * 
+ * 官方文档:
+ *   文生图: https://docs.apiyi.com/api-capabilities/gpt-image-2/text-to-image
+ *   图片编辑: https://docs.apiyi.com/api-capabilities/gpt-image-2/image-edit
+ * 
+ * 关键约束 (来自文档):
+ *   - model 固定填 'gpt-image-2'
+ *   - quality: auto | low | medium | high
+ *   - 不要传 input_fidelity (会 400 报错)
+ *   - background: auto | opaque (不支持 transparent)
+ *   - 图片编辑走 multipart/form-data POST /v1/images/edits
+ *   - 文生图走 JSON POST /v1/images/generations
+ *   - b64_json 是纯 base64, 不含 data:image/...;base64, 前缀
+ *   - 参考图最多 16 张, 单张 < 50MB, 格式 png/jpg/webp
+ *   - mask 仅对第一张 image 生效, 需与原图同尺寸, PNG < 4MB, 带 alpha
+ */
 export async function executeApiyiGptImage2(node, inputs, env, pool, orderContext, abortSignal) {
+  // ── 1. API 配置 ──
   const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
   const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
+  if (!apiKey) throw new Error('[GPT-Image-2] ApiYi API Key 未配置');
 
-  if (!apiKey) throw new Error('ApiYi API Key not configured');
+  // ── 2. 模型: 文档明确规定固定填 gpt-image-2, 不接受任何其他值 ──
+  const MODEL = 'gpt-image-2';
 
+  // ── 3. Prompt 解析 ──
   let prompt = inputs.prompt || node.data.prompt || '';
   if (Array.isArray(prompt)) {
     prompt = prompt.map(p => typeof p === 'string' ? p : JSON.stringify(p)).filter(Boolean).join('\n');
@@ -727,13 +749,9 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
   }
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
-  let modelId = node.data.modelId || 'gpt-image-2';
-  if (modelId === 'gpt-image-2-vip') {
-    modelId = 'gpt-image-2'; // Force override legacy invalid model
-  }
-  
-  // Resolution parsing
-  let size = '1024x1024';
+
+  // ── 4. 尺寸解析 ──
+  let size = 'auto';
   if (node.data.sizeMode === 'custom') {
     const w = parseInt(node.data.customWidth) || 2048;
     const h = parseInt(node.data.customHeight) || 2048;
@@ -742,88 +760,115 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
     size = node.data.imageResolution || 'auto';
   }
 
-  const quality = inputs.quality || node.data.quality || 'auto';
+  // ── 5. Quality: 文档枚举 auto | low | medium | high ──
+  const VALID_QUALITIES = ['auto', 'low', 'medium', 'high'];
+  let quality = inputs.quality || node.data.quality || 'auto';
+  if (!VALID_QUALITIES.includes(quality)) {
+    console.warn(`[GPT-Image-2] Invalid quality "${quality}", falling back to "auto"`);
+    quality = 'auto';
+  }
 
-  let combined_images = [
+  // ── 6. 收集参考图 (本节点的输入端口: image_1, image_2, image_3, images_array) ──
+  let referenceImages = [
     inputs.image_1 || node.data.image_1,
     inputs.image_2 || node.data.image_2,
     inputs.image_3 || node.data.image_3,
     inputs.images_array || node.data.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
-  // Limit to 16 images per API specification
-  if (combined_images.length > 16) {
-    console.log(`[ApiYi GPT-Image-2] Warning: Truncating reference images from ${combined_images.length} to 16`);
-    combined_images = combined_images.slice(0, 16);
+  // 文档限制: 最多 16 张
+  if (referenceImages.length > 16) {
+    console.warn(`[GPT-Image-2] 参考图 ${referenceImages.length} 张, 截断至文档上限 16 张`);
+    referenceImages = referenceImages.slice(0, 16);
   }
 
-  const mask_image = inputs.mask || node.data.mask || null;
-  const hasReferenceImages = combined_images.length > 0;
-  
+  // ── 7. Mask (可选, 仅对第一张 image 生效) ──
+  const maskUrl = inputs.mask || node.data.mask || null;
+
+  const hasReferenceImages = referenceImages.length > 0;
+  const baseUrl = endpointBase.replace(/\/$/, '');
+  const headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
+
   let endpointUrl;
   let reqBody;
-  let headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
 
   if (hasReferenceImages) {
-    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+    // ────────────────────────────────────────────────
+    // 图片编辑: POST /v1/images/edits (multipart/form-data)
+    // ────────────────────────────────────────────────
+    endpointUrl = `${baseUrl}/images/edits`;
     const fd = new FormData();
-    fd.append('model', modelId);
+    fd.append('model', MODEL);
     fd.append('prompt', prompt);
     if (size && size !== 'auto') fd.append('size', size);
-    if (quality) fd.append('quality', quality);
-    fd.append('response_format', 'url');
+    fd.append('quality', quality);
 
-    console.log(`[ApiYi GPT-Image-2] Reference images to fetch (${combined_images.length}):`, combined_images);
+    console.log(`[GPT-Image-2] 图片编辑模式: ${referenceImages.length} 张参考图`);
 
-    for (let i = 0; i < combined_images.length; i++) {
-      const imgUrl = combined_images[i];
-      const displayUrl = imgUrl.length > 100 ? imgUrl.substring(0, 100) + '...[truncated]' : imgUrl;
-      console.log(`[ApiYi GPT-Image-2] Fetching ref image ${i+1}/${combined_images.length}: ${displayUrl}`);
+    // 下载并附加参考图 (文档字段名: image, 可重复)
+    for (let i = 0; i < referenceImages.length; i++) {
+      const imgUrl = referenceImages[i];
+      const preview = imgUrl.length > 80 ? imgUrl.substring(0, 80) + '...' : imgUrl;
+      console.log(`[GPT-Image-2] 下载参考图 ${i + 1}/${referenceImages.length}: ${preview}`);
       try {
-        const imgRes = await fetchWithRetry(imgUrl, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
-        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for URL: ${displayUrl}`);
+        const imgRes = await fetchWithRetry(imgUrl, {
+          signal: abortSignal
+            ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)])
+            : AbortSignal.timeout(60000)
+        });
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
         const imgBlob = await imgRes.blob();
+        // 根据 MIME 类型确定扩展名
         let ext = 'png';
-        if (imgBlob.type) {
-           if (imgBlob.type.includes('jpeg') || imgBlob.type.includes('jpg')) ext = 'jpg';
-           else if (imgBlob.type.includes('webp')) ext = 'webp';
-        }
+        if (imgBlob.type?.includes('jpeg') || imgBlob.type?.includes('jpg')) ext = 'jpg';
+        else if (imgBlob.type?.includes('webp')) ext = 'webp';
         fd.append('image', imgBlob, `image_${i}.${ext}`);
       } catch (e) {
-        throw new Error(`ApiYi GPT-Image-2 failed to fetch reference image ${i+1}/${combined_images.length} — URL: ${displayUrl} — Error: ${e.message}`);
+        throw new Error(`[GPT-Image-2] 下载参考图 ${i + 1} 失败 — URL: ${preview} — ${e.message}`);
       }
     }
-    
-    if (mask_image && typeof mask_image === 'string') {
-        console.log(`[ApiYi GPT-Image-2] Fetching mask image: ${mask_image.substring(0, 50)}...`);
-        try {
-            const maskRes = await fetchWithRetry(mask_image, { signal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
-            if (!maskRes.ok) throw new Error(`HTTP ${maskRes.status}`);
-            const maskBlob = await maskRes.blob();
-            fd.append('mask', maskBlob, `mask.png`);
-        } catch(e) {
-            console.error(`[ApiYi GPT-Image-2] Warning: failed to fetch mask image: ${e.message}`);
-        }
+
+    // Mask (可选)
+    if (maskUrl && typeof maskUrl === 'string') {
+      console.log(`[GPT-Image-2] 下载 mask 图: ${maskUrl.substring(0, 60)}...`);
+      try {
+        const maskRes = await fetchWithRetry(maskUrl, {
+          signal: abortSignal
+            ? AbortSignal.any([abortSignal, AbortSignal.timeout(60000)])
+            : AbortSignal.timeout(60000)
+        });
+        if (!maskRes.ok) throw new Error(`HTTP ${maskRes.status}`);
+        const maskBlob = await maskRes.blob();
+        fd.append('mask', maskBlob, 'mask.png');
+      } catch (e) {
+        console.error(`[GPT-Image-2] mask 下载失败 (跳过): ${e.message}`);
+      }
     }
-    
+
     reqBody = fd;
+    // 不设 Content-Type, FormData 会自动带 multipart boundary
+
   } else {
-    endpointUrl = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+    // ────────────────────────────────────────────────
+    // 文生图: POST /v1/images/generations (JSON)
+    // ────────────────────────────────────────────────
+    endpointUrl = `${baseUrl}/images/generations`;
     const payload = {
-      model: modelId,
+      model: MODEL,
       prompt: prompt,
       n: 1,
-      quality: quality,
-      response_format: 'url'
+      quality: quality
     };
     if (size && size !== 'auto') payload.size = size;
     reqBody = JSON.stringify(payload);
     headers['Content-Type'] = 'application/json';
   }
 
-  console.log(`[ApiYi GPT-Image-2] Executing ${hasReferenceImages ? 'image edits' : 'image generations'} via ${endpointUrl}`);
-  console.log(`[ApiYi GPT-Image-2] Parameters: size=${size}, quality=${quality}, hasMask=${!!mask_image}`);
-  
+  console.log(`[GPT-Image-2] 请求: ${endpointUrl}`);
+  console.log(`[GPT-Image-2] 参数: model=${MODEL}, size=${size}, quality=${quality}, 参考图=${referenceImages.length}, mask=${!!maskUrl}`);
+  console.log(`[GPT-Image-2] Prompt (预览): ${prompt.substring(0, 150)}`);
+
+  // ── 8. 发送请求 ──
   const response = await fetchWithRetry(endpointUrl, {
     method: 'POST',
     headers: headers,
@@ -831,28 +876,42 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
     signal: abortSignal
   });
 
+  // ── 9. 解析响应 ──
   const responseText = await response.text();
   let responseData;
   try {
     responseData = JSON.parse(responseText);
   } catch (e) {
-    throw new Error(`ApiYi API returned non-JSON response: ${responseText.substring(0, 200)}`);
+    throw new Error(`[GPT-Image-2] API 返回非 JSON: ${responseText.substring(0, 300)}`);
   }
 
   if (!response.ok) {
-    throw new Error(`ApiYi API error: [${response.status}] ${JSON.stringify(responseData)}`);
+    throw new Error(`[GPT-Image-2] API 错误 [${response.status}]: ${JSON.stringify(responseData)}`);
   }
 
   if (!responseData.data || !Array.isArray(responseData.data) || responseData.data.length === 0) {
-    throw new Error(`ApiYi API returned empty data: ${JSON.stringify(responseData)}`);
+    throw new Error(`[GPT-Image-2] API 返回空 data: ${JSON.stringify(responseData)}`);
   }
 
-  const generatedUrls = responseData.data.map(item => item.url || item.b64_json).filter(Boolean);
+  // 文档明确: b64_json 是纯 base64, 不含 data:image/...;base64, 前缀
+  // 如果有 url 字段则直接用, 否则拼接 data URL 前缀以便下游节点使用
+  const generatedUrls = responseData.data.map(item => {
+    if (item.url) return item.url;
+    if (item.b64_json) {
+      // 文档: "纯 base64 字符串 (不含 data:image/...;base64, 前缀)"
+      // 但为了防御性编程, 检测是否已有前缀
+      if (item.b64_json.startsWith('data:')) return item.b64_json;
+      return `data:image/png;base64,${item.b64_json}`;
+    }
+    return null;
+  }).filter(Boolean);
+
   if (generatedUrls.length === 0) {
-    throw new Error(`ApiYi API returned data without urls: ${JSON.stringify(responseData)}`);
+    throw new Error(`[GPT-Image-2] API 返回 data 中无可用图片: ${JSON.stringify(responseData)}`);
   }
-  
-  console.log(`[ApiYi GPT-Image-2] Successfully generated ${generatedUrls.length} images`);
+
+  console.log(`[GPT-Image-2] 成功生成 ${generatedUrls.length} 张图片`);
 
   return { output: generatedUrls };
 }
+
