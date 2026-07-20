@@ -115,7 +115,10 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
-  const modelId = node.data.modelId || 'openai/gpt-5.4-image-2';
+  let modelId = node.data.modelId || 'openai/gpt-image-2';
+  if (modelId === 'openai/gpt-5.4-image-2') {
+    modelId = 'openai/gpt-image-2';
+  }
   const aspectRatio = node.data.aspectRatio || '';
   const imageResolution = node.data.imageResolution || '';
 
