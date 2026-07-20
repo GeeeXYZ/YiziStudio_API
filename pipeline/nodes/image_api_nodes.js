@@ -232,7 +232,10 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   }
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
-  const modelId = node.data.modelId || 'gpt-image-2-vip';
+  let modelId = node.data.modelId || 'gpt-image-2';
+  if (modelId === 'gpt-image-2-vip') {
+    modelId = 'gpt-image-2';
+  }
   const size = node.data.imageResolution || '1024x1024';
 
   let combined_images = [
@@ -724,7 +727,10 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
   }
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
-  const modelId = node.data.modelId || 'gpt-image-2';
+  let modelId = node.data.modelId || 'gpt-image-2';
+  if (modelId === 'gpt-image-2-vip') {
+    modelId = 'gpt-image-2'; // Force override legacy invalid model
+  }
   
   // Resolution parsing
   let size = '1024x1024';
