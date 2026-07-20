@@ -12,7 +12,13 @@ export async function executeImageStitch(node, inputs, orderContext, env) {
   const images = [];
   for (let i = 1; i <= 4; i++) {
     const img = inputs[`image_${i}`] || node.data?.[`image_${i}`];
-    if (img && typeof img === 'string' && img.trim()) images.push(img.trim());
+    if (img) {
+      if (Array.isArray(img)) {
+        img.flat().forEach(u => { if (typeof u === 'string' && u.trim()) images.push(u.trim()); });
+      } else if (typeof img === 'string' && img.trim()) {
+        images.push(img.trim());
+      }
+    }
   }
 
   // Also accept array input
