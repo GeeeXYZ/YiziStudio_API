@@ -7,6 +7,7 @@ import { formatOrderRow } from '../utils/helpers.js';
 import { getOSSToken } from '../utils/oss.js';
 import { runPipeline } from '../pipeline/index.js';
 import { orderEventEmitter } from '../events.js';
+import { stitchImages } from '../pipeline/core/image_stitcher.js';
 import OSS from 'ali-oss';
 import Core from '@alicloud/pop-core';
 
@@ -412,6 +413,44 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 auto_delivery: skuData.auto_delivery === true || skuData.auto_delivery === 'true' || skuData.auto_delivery === 1 || skuData.auto_delivery === '1',
                 
               };
+
+              // --- Auto Stitch: combine pose + user images into a single reference sheet per set ---
+              try {
+                const stitchSources = [
+                  orderContext.selectedPoseUrl,
+                  ...(orderContext.images || [])
+                ].filter(u => typeof u === 'string' && u.trim() !== '');
+
+                if (stitchSources.length >= 2) {
+                  console.log(`[Auto Stitch] Stitching ${stitchSources.length} images for Order ${orderId} Set ${index}`);
+                  const { buffer: stitchedBuf } = await stitchImages(stitchSources);
+
+                  // Upload to OSS
+                  const ossClient = new OSS({
+                    region: process.env.OSS_REGION,
+                    accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+                    accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+                    bucket: process.env.OSS_BUCKET,
+                    secure: true,
+                    timeout: 30000,
+                    ...(process.env.OSS_ENDPOINT ? { endpoint: process.env.OSS_ENDPOINT } : {})
+                  });
+                  const ossPath = `pipeline_outputs/${unionid}/${orderId}/stitched_set${index}_${Date.now()}.jpg`;
+                  const putResult = await ossClient.put(ossPath, stitchedBuf);
+                  let stitchedUrl = putResult.url;
+                  if (stitchedUrl.startsWith('http://')) stitchedUrl = stitchedUrl.replace('http://', 'https://');
+
+                  orderContext.stitched_image = stitchedUrl;
+                  // Persist into set data for workspace display
+                  set.stitched_image = stitchedUrl;
+                  console.log(`[Auto Stitch] Set ${index} stitched → ${stitchedUrl.substring(0, 80)}...`);
+                } else {
+                  console.log(`[Auto Stitch] Set ${index}: not enough images to stitch (${stitchSources.length})`);
+                }
+              } catch (stitchErr) {
+                console.warn(`[Auto Stitch] Failed for Order ${orderId} Set ${index}:`, stitchErr.message);
+                // Non-fatal: pipeline can still run without stitched image
+              }
               
               console.log(`[Auto Trigger] Starting pipeline for Order ${orderId} Set ${index}`);
               // Fire-and-forget: starts immediately, creating event loop timers

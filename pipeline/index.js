@@ -8,6 +8,7 @@ import { executeSeedream, executeApiyiPreset, executeGrsaiPreset, executeOpenRou
 import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { executeColorGrading } from './nodes/color_grading_node.js';
+import { executeImageStitch } from './nodes/image_stitch_node.js';
 import { uploadToOSS } from './core/oss_helper.js';
 import { finalizePipelineBilling } from '../services/billingService.js';
 
@@ -75,6 +76,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'oss_output': return await executeOssOutput(node, inputs, orderContext, env);
     case 'http_request': return await executeHttpRequest(node, inputs, abortSignal);
     case 'color_grading': return await executeColorGrading(node, inputs);
+    case 'image_stitch': return await executeImageStitch(node, inputs, orderContext, env);
     
     default:
       console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
@@ -158,7 +160,8 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           oss_output: '后处理与云端上传', prompt_library: '抽取提示词配置',
           prompt_board: '提示词板', text_input: '文本输入', image_input: '图片输入', image_preview: '图片预览', text_preview: '文本预览',
           string_concat: '文本拼接', llm_call: '大模型调用', http_request: 'HTTP 请求',
-          seedream: '即梦生图', preset_openrouter: '大模型绘图', grok_imagine: 'Grok Imagine 推理'
+          seedream: '即梦生图', preset_openrouter: '大模型绘图', grok_imagine: 'Grok Imagine 推理',
+          image_stitch: '图片拼接'
         };
 
         const traceLog = {

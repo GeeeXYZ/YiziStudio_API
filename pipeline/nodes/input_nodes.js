@@ -25,7 +25,8 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
     prompt_slot_1: orderContext.prompt_slot_1 || '',
     prompt_slot_2: orderContext.prompt_slot_2 || '',
     prompt_slot_3: orderContext.prompt_slot_3 || '',
-    prompt_slot_4: orderContext.prompt_slot_4 || ''
+    prompt_slot_4: orderContext.prompt_slot_4 || '',
+    stitched_image: orderContext.stitched_image || ''
   };
   
   // Random Pose Image Fetching — OSS directory is the single source of truth
