@@ -8,8 +8,12 @@ import { splitImageGrid } from '../core/image_splitter.js';
 import OSS from 'ali-oss';
 
 export async function executeImageSplit(node, inputs, orderContext, env) {
-  const image = inputs.image || node.data?.image;
+  let image = inputs.image || node.data?.image;
   const gridMode = inputs.gridMode || node.data?.gridMode || '2x2';
+  
+  if (Array.isArray(image)) {
+    image = image[0]; // 取第一张图
+  }
 
   if (!image || typeof image !== 'string' || !image.trim()) {
     throw new Error('ImageSplit: 没有收到有效的图片输入');

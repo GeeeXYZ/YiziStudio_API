@@ -724,8 +724,7 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
   }
   prompt = String(prompt).trim();
   if (!prompt) prompt = 'a beautiful image';
-
-  const modelId = node.data.modelId || 'gpt-image-2-vip';
+  const modelId = node.data.modelId || 'gpt-image-2';
   
   // Resolution parsing
   let size = '1024x1024';
@@ -736,6 +735,8 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
   } else {
     size = node.data.imageResolution || 'auto';
   }
+
+  const quality = inputs.quality || node.data.quality || 'standard';
 
   let combined_images = [
     inputs.image_1 || node.data.image_1,
@@ -763,6 +764,7 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
     fd.append('model', modelId);
     fd.append('prompt', prompt);
     if (size && size !== 'auto') fd.append('size', size);
+    if (quality) fd.append('quality', quality);
     fd.append('response_format', 'url');
 
     console.log(`[ApiYi GPT-Image-2] Reference images to fetch (${combined_images.length}):`, combined_images);
@@ -805,6 +807,7 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
       model: modelId,
       prompt: prompt,
       n: 1,
+      quality: quality,
       response_format: 'url'
     };
     if (size && size !== 'auto') payload.size = size;
