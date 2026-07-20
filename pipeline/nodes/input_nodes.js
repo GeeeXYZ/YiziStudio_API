@@ -15,6 +15,10 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
   const outputs = {
     user_prompt: orderContext.prompt || '',
     user_images: orderContext.images || [],
+    user_image_1: (orderContext.images && orderContext.images[0]) ? orderContext.images[0] : '',
+    user_image_2: (orderContext.images && orderContext.images[1]) ? orderContext.images[1] : '',
+    user_image_3: (orderContext.images && orderContext.images[2]) ? orderContext.images[2] : '',
+    user_image_4: (orderContext.images && orderContext.images[3]) ? orderContext.images[3] : '',
     order_info: {
       openid: orderContext.openid,
       order_id: orderContext.order_id,
@@ -93,8 +97,9 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
 
       if (stitchSources.length >= 2) {
         const { stitchImages } = await import('../core/image_stitcher.js');
-        console.log(`[Auto Stitch] Stitching ${stitchSources.length} images for Order ${orderContext.order_id} Set ${orderContext.set_index}`);
-        const { buffer: stitchedBuf } = await stitchImages(stitchSources);
+        const maxEdge = parseInt(node.data?.stitchMaxEdge) || 2560;
+        console.log(`[Auto Stitch] Stitching ${stitchSources.length} images for Order ${orderContext.order_id} Set ${orderContext.set_index} (maxEdge=${maxEdge})`);
+        const { buffer: stitchedBuf } = await stitchImages(stitchSources, { maxEdge });
 
         // Upload to OSS
         const OSS = (await import('ali-oss')).default;
