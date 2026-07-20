@@ -28,8 +28,10 @@ export async function executeImageStitch(node, inputs, orderContext, env) {
     throw new Error('ImageStitch: 没有收到任何图片输入');
   }
 
-  console.log(`[ImageStitch Node] Stitching ${images.length} images...`);
-  const { buffer } = await stitchImages(images);
+  const maxEdge = parseInt(inputs.maxEdge || node.data?.maxEdge) || 2560;
+
+  console.log(`[ImageStitch Node] Stitching ${images.length} images (maxEdge=${maxEdge})...`);
+  const { buffer } = await stitchImages(images, { maxEdge });
 
   // Upload to OSS
   const ossClient = new OSS({
