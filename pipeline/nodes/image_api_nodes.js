@@ -816,6 +816,7 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
   }
 
   console.log(`[ApiYi GPT-Image-2] Executing ${hasReferenceImages ? 'image edits' : 'image generations'} via ${endpointUrl}`);
+  console.log(`[ApiYi GPT-Image-2] Parameters: size=${size}, quality=${quality}, hasMask=${!!mask_image}`);
   
   const response = await fetchWithRetry(endpointUrl, {
     method: 'POST',
