@@ -133,6 +133,10 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
         const setIndex = mock_order.set_index || 0;
         if (orderData.sets && orderData.sets[setIndex]) {
           mock_order.images = mock_order.images || orderData.sets[setIndex].images || [];
+          // Inherit stitched_image from order data if available
+          if (!mock_order.stitched_image && orderData.sets[setIndex].stitched_image) {
+            mock_order.stitched_image = orderData.sets[setIndex].stitched_image;
+          }
           // NOTE: Do NOT inherit selectedPoseUrl from the order.
           // The order stores the pose URL from order-time, which may be stale (deleted from OSS)
           // or from an old template config. Let the pipeline pick a fresh pose from current settings.
@@ -487,8 +491,17 @@ router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
       prompt_slot_3: resolvedSlots[2] || '',
       prompt_slot_4: resolvedSlots[3] || '',
       model_name: model_name || 'Test Model',
-      skuData: skuData
+      skuData: skuData,
+      stitched_image: ''
     };
+
+    // Inherit stitched_image from stored order set data if available
+    if (order_id && orderDbData?.sets) {
+      const setIdx = 0;
+      if (orderDbData.sets[setIdx]?.stitched_image) {
+        orderContext.stitched_image = orderDbData.sets[setIdx].stitched_image;
+      }
+    }
 
     const result = await runPipeline(workflow_json, orderContext, pool, { simulate: true });
     return res.json({ msg: 'ok', data: result });
