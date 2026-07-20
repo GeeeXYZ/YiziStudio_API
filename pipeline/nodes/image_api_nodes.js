@@ -732,13 +732,13 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
  *   - mask 仅对第一张 image 生效, 需与原图同尺寸, PNG < 4MB, 带 alpha
  */
 export async function executeApiyiGptImage2(node, inputs, env, pool, orderContext, abortSignal) {
-  // ── 1. API 配置 ──
   const endpointBase = env.APIYI_API_ENDPOINT || await getSetting(pool, 'APIYI_API_ENDPOINT') || 'https://api.apiyi.com/v1';
-  const apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
+  let apiKey = env.APIYI_GPT_IMAGE2_API_KEY || await getSetting(pool, 'APIYI_GPT_IMAGE2_API_KEY');
+  if (!apiKey) apiKey = env.APIYI_API_KEY || await getSetting(pool, 'APIYI_API_KEY');
   if (!apiKey) throw new Error('[GPT-Image-2] ApiYi API Key 未配置');
 
-  // ── 2. 模型: 允许用户通过节点配置选择具体的后端路由组 (例如 gpt-image-2-all) ──
-  const MODEL = node.data.modelId || 'gpt-image-2';
+  // ── 2. 模型: 文档明确规定固定填 gpt-image-2, 不接受任何其他值 ──
+  const MODEL = 'gpt-image-2';
 
   // ── 3. Prompt 解析 ──
   let prompt = inputs.prompt || node.data.prompt || '';
