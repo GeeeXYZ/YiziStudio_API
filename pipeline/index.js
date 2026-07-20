@@ -9,6 +9,7 @@ import { executeOssOutput } from './nodes/output_nodes.js';
 import { executeImagePreview, executeTextPreview, executeHttpRequest } from './nodes/misc_nodes.js';
 import { executeColorGrading } from './nodes/color_grading_node.js';
 import { executeImageStitch } from './nodes/image_stitch_node.js';
+import { executeImageSplit } from './nodes/image_split_node.js';
 import { uploadToOSS } from './core/oss_helper.js';
 import { finalizePipelineBilling } from '../services/billingService.js';
 
@@ -77,6 +78,7 @@ export async function runSingleNode(node, inputs, env, pool, orderContext, execu
     case 'http_request': return await executeHttpRequest(node, inputs, abortSignal);
     case 'color_grading': return await executeColorGrading(node, inputs);
     case 'image_stitch': return await executeImageStitch(node, inputs, orderContext, env);
+    case 'image_split': return await executeImageSplit(node, inputs, orderContext, env);
     
     default:
       console.log(`[Pipeline] Unrecognized node type: ${node.type}, skipping execution.`);
