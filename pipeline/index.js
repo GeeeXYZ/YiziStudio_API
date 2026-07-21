@@ -94,6 +94,33 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
   // Ledger for billing
   const executionLedger = {};
   const traceLogs = [];
+  let isOssSuccess = false;
+  let imagesToSave = [];
+
+  const saveTestLogToDb = async (status, errMessage = null) => {
+    if (simulate && pool) {
+      try {
+        const logUuid = 'test_' + crypto.randomUUID().substring(0, 8);
+        const logData = {
+          title: `[测试] ${orderContext?.order_id || '未知工作流'} - ${status}`,
+          created_time: Date.now(),
+          data: {
+            status,
+            success: isOssSuccess,
+            finalImages: imagesToSave,
+            traceLogs: traceLogs,
+            error: errMessage
+          }
+        };
+        await pool.query(
+          'INSERT INTO "yizi_workflow_logs" (uuid, title, created_time, data) VALUES ($1, $2, $3, $4)',
+          [logUuid, logData.title, logData.created_time, JSON.stringify(logData.data)]
+        );
+      } catch (e) {
+        console.error('[Pipeline] Failed to save test log to db:', e.message);
+      }
+    }
+  };
 
   try {
     const parsedData = typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson;
@@ -306,7 +333,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
     console.log(`[Pipeline] Post-exec summary: ${finalOssImages.length} OSS images, ${rawGeneratedImages.length} raw images, ${allFailedUploads.length} failed uploads`);
     
     isOssSuccess = finalOssImages.length > 0;
-    let imagesToSave = isOssSuccess ? finalOssImages : [];
+    imagesToSave = isOssSuccess ? finalOssImages : [];
     
     // Determine images that were generated but NOT yet uploaded to OSS.
     // This covers two scenarios:
@@ -468,6 +495,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
 
     if (pipelineError) {
       console.warn(`[Pipeline] Partial failure: ${failures.length} node(s) failed, but ${imagesToSave.length} images were saved successfully.`);
+      await saveTestLogToDb('partial_failure', pipelineError.message);
       return { success: true, partial: true, images: imagesToSave, failed_uploads: allFailedUploads, error: pipelineError.message, traceLogs };
     }
 
@@ -480,10 +508,12 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
       });
     }
 
+    await saveTestLogToDb('success');
     return { success: true, images: imagesToSave, failed_uploads: allFailedUploads, traceLogs };
 
   } catch (error) {
     console.error(`[Pipeline] Fatal error during pipeline execution:`, error);
+    await saveTestLogToDb('fatal_error', error.message);
     if (pool && pipelineLogId) {
        pool.query(
          'UPDATE "yizi_api_logs" SET status = $1, error_msg = $2, updated_at = NOW() WHERE id = $3',
