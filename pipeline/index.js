@@ -323,7 +323,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
        console.log(`[Pipeline] ${missingImages.length} generated images not yet in OSS (${finalOssImages.length} already uploaded). Attempting fallback upload...`);
        try {
            const ossConfig = { region: process.env.OSS_REGION, accessKeyId: process.env.OSS_ACCESS_KEY_ID, accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET, bucket: process.env.OSS_BUCKET, secure: true, timeout: 300000 };
-           if (env.OSS_ENDPOINT) ossConfig.endpoint = env.OSS_ENDPOINT;
+           if (process.env.OSS_ENDPOINT) ossConfig.endpoint = process.env.OSS_ENDPOINT;
            if (ossConfig.accessKeyId) {
                const OSS = (await import('ali-oss')).default;
                const ossClient = new OSS(ossConfig);
