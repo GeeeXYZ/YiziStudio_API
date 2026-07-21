@@ -103,19 +103,8 @@ export async function stitchImages(imageUrls, options = {}) {
     // Flatten to ensure no alpha issues, convert to PNG buffer
     const resizedBuf = await img.flatten({ background: { r: 255, g: 255, b: 255 } }).png().toBuffer();
 
-    // 3. Add number overlay (fixed size, do not scale with image)
-    const labelScale = 1.5;
-    const { svg } = createNumberSvg(labels[i] || (i + 1), labelScale);
-    const numberedBuf = await sharp(resizedBuf)
-      .composite([{
-        input: Buffer.from(svg),
-        top: 0,
-        left: 0,
-      }])
-      .png()
-      .toBuffer();
-
-    processedImages.push({ buffer: numberedBuf, width: w, height: h });
+    // Just store the image and its label, we will overlay the label on the final canvas
+    processedImages.push({ buffer: resizedBuf, width: w, height: h, label: labels[i] || String(i + 1) });
   }
 
   // 4. Layout: Adaptive Column Layout based on labels
@@ -128,7 +117,7 @@ export async function stitchImages(imageUrls, options = {}) {
   
   for (let i = 0; i < processedImages.length; i++) {
     const img = processedImages[i];
-    const label = labels[i] || String(i + 1);
+    const label = img.label;
     
     let colKey;
     if (label === '0' || label.startsWith('0.')) colKey = 'col_0';
@@ -192,9 +181,9 @@ export async function stitchImages(imageUrls, options = {}) {
     
     let colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
     
-    // Restrict max width to 300px for col_2_3
-    if (col.key === 'col_2_3' && colW > 300) {
-      colW = 300;
+    // Restrict max width to 400px for col_2_3
+    if (col.key === 'col_2_3' && colW > 400) {
+      colW = 400;
     }
     
     let actualTotalH = 0;
@@ -217,6 +206,12 @@ export async function stitchImages(imageUrls, options = {}) {
       
       const buf = await sharp(img.buffer).resize(colW, imgH, { fit: 'fill' }).png().toBuffer();
       composites.push({ input: buf, top: yCursor, left: xCursor });
+      
+      // Overlay the label AT FIXED absolute pixel size on the final canvas
+      const labelScale = 1.5;
+      const { svg } = createNumberSvg(img.label, labelScale);
+      composites.push({ input: Buffer.from(svg), top: yCursor, left: xCursor });
+      
       yCursor += imgH + gap;
     }
     xCursor += colW + gap;
