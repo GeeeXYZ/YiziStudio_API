@@ -182,54 +182,44 @@ export async function stitchImages(imageUrls, options = {}) {
 
   for (const col of finalColumns) {
     const colImages = col.images;
-    if (colImages.length === 1) {
-      // Single image in column -> scale to targetH
-      const img = colImages[0];
-      const scale = targetH / img.height;
-      const colW = Math.round(img.width * scale);
-      const buf = await sharp(img.buffer).resize(colW, targetH, { fit: 'fill' }).png().toBuffer();
-      
-      composites.push({ input: buf, top: 0, left: xCursor });
-      xCursor += colW + gap;
-    } else {
-      // Multiple images in column -> stack them, scaling uniformly to match targetH
-      const totalImageHTarget = targetH - gap * (colImages.length - 1);
-      let sumInvAspect = 0;
-      for (const img of colImages) {
-        sumInvAspect += img.height / img.width;
-      }
-      
-      let colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
-      
-      // Restrict max width to 300px for col_2_3
-      if (col.key === 'col_2_3' && colW > 300) {
-        colW = 300;
-      }
-      
-      let actualTotalH = 0;
-      for (const img of colImages) {
-        actualTotalH += Math.round(colW * (img.height / img.width));
-      }
-      actualTotalH += gap * (colImages.length - 1);
-      
-      let yCursor = actualTotalH < targetH ? Math.round((targetH - actualTotalH) / 2) : 0;
-      
-      for (let j = 0; j < colImages.length; j++) {
-        const img = colImages[j];
-        // For the last image, absorb any rounding errors ONLY if we are stretching to fit targetH
-        let imgH;
-        if (j === colImages.length - 1 && actualTotalH >= targetH) {
-          imgH = Math.max(1, targetH - yCursor);
-        } else {
-          imgH = Math.round(colW * (img.height / img.width));
-        }
-        
-        const buf = await sharp(img.buffer).resize(colW, imgH, { fit: 'fill' }).png().toBuffer();
-        composites.push({ input: buf, top: yCursor, left: xCursor });
-        yCursor += imgH + gap;
-      }
-      xCursor += colW + gap;
+    
+    // Process images in column (works for both single and multiple images), scaling uniformly to match targetH
+    const totalImageHTarget = targetH - gap * (colImages.length - 1);
+    let sumInvAspect = 0;
+    for (const img of colImages) {
+      sumInvAspect += img.height / img.width;
     }
+    
+    let colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
+    
+    // Restrict max width to 300px for col_2_3
+    if (col.key === 'col_2_3' && colW > 300) {
+      colW = 300;
+    }
+    
+    let actualTotalH = 0;
+    for (const img of colImages) {
+      actualTotalH += Math.round(colW * (img.height / img.width));
+    }
+    actualTotalH += gap * (colImages.length - 1);
+    
+    let yCursor = actualTotalH < targetH ? Math.round((targetH - actualTotalH) / 2) : 0;
+    
+    for (let j = 0; j < colImages.length; j++) {
+      const img = colImages[j];
+      // For the last image, absorb any rounding errors ONLY if we are stretching to fit targetH
+      let imgH;
+      if (j === colImages.length - 1 && actualTotalH >= targetH) {
+        imgH = Math.max(1, targetH - yCursor);
+      } else {
+        imgH = Math.round(colW * (img.height / img.width));
+      }
+      
+      const buf = await sharp(img.buffer).resize(colW, imgH, { fit: 'fill' }).png().toBuffer();
+      composites.push({ input: buf, top: yCursor, left: xCursor });
+      yCursor += imgH + gap;
+    }
+    xCursor += colW + gap;
   }
 
   const canvasW = Math.max(1, xCursor - gap);
