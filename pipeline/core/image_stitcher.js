@@ -63,16 +63,18 @@ function createNumberSvg(num, scale = 1) {
 /**
  * 主拼接函数
  * 
- * @param {string[]} imageUrls — 图片 URL 列表（按顺序编号 1, 2, 3...）
+ * @param {string[]} imageUrls — 图片 URL 列表
  * @param {object} options
  * @param {number} options.maxEdge — 单张图最大边限制，默认 2560
  * @param {number} options.gap — 图片间距（像素），默认 8
+ * @param {string[]} options.labels — 每张图的标注文字，与 imageUrls 一一对应。若不提供则按顺序 1,2,3...
  * @returns {{ buffer: Buffer, width: number, height: number }}
  */
 export async function stitchImages(imageUrls, options = {}) {
   const sharp = (await import('sharp')).default;
   const maxEdge = options.maxEdge ?? MAX_EDGE_DEFAULT;
   const gap = options.gap ?? 8;
+  const labels = options.labels || imageUrls.map((_, i) => String(i + 1));
 
   if (!imageUrls || imageUrls.length === 0) {
     throw new Error('stitchImages: No image URLs provided');
@@ -103,7 +105,7 @@ export async function stitchImages(imageUrls, options = {}) {
 
     // 3. Add number overlay
     const labelScale = Math.max(0.8, Math.min(2.0, Math.min(w, h) / 400));
-    const { svg } = createNumberSvg(i + 1, labelScale);
+    const { svg } = createNumberSvg(labels[i] || (i + 1), labelScale);
     const numberedBuf = await sharp(resizedBuf)
       .composite([{
         input: Buffer.from(svg),
