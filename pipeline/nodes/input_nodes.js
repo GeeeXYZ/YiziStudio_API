@@ -90,16 +90,28 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
   // --- Auto Stitch: combine pose(#1) + user images(#2,#3...) after pose is determined ---
   if (!orderContext.stitched_image) {
     try {
-      const stitchSources = [
-        outputs.random_pose_image,
-        ...(outputs.user_images || [])
-      ].filter(u => typeof u === 'string' && u.trim() !== '');
+      const stitchSources = [];
+      const labels = [];
+
+      if (typeof outputs.random_pose_image === 'string' && outputs.random_pose_image.trim() !== '') {
+        stitchSources.push(outputs.random_pose_image.trim());
+        labels.push('0');
+      }
+
+      if (Array.isArray(outputs.user_images)) {
+        outputs.user_images.forEach((u, idx) => {
+          if (typeof u === 'string' && u.trim() !== '') {
+            stitchSources.push(u.trim());
+            labels.push(String(idx + 1));
+          }
+        });
+      }
 
       if (stitchSources.length >= 2) {
         const { stitchImages } = await import('../core/image_stitcher.js');
         const maxEdge = parseInt(node.data?.stitchMaxEdge) || 2560;
-        console.log(`[Auto Stitch] Stitching ${stitchSources.length} images for Order ${orderContext.order_id} Set ${orderContext.set_index} (maxEdge=${maxEdge})`);
-        const { buffer: stitchedBuf } = await stitchImages(stitchSources, { maxEdge });
+        console.log(`[Auto Stitch] Stitching ${stitchSources.length} images for Order ${orderContext.order_id} Set ${orderContext.set_index} (maxEdge=${maxEdge}), labels=[${labels.join(', ')}]`);
+        const { buffer: stitchedBuf } = await stitchImages(stitchSources, { maxEdge, labels });
 
         // Upload to OSS
         const OSS = (await import('ali-oss')).default;
