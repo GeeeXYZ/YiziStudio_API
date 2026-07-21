@@ -235,10 +235,23 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   const modelId = node.data.modelId || 'gpt-image-2';
   const size = node.data.imageResolution || '1024x1024';
 
-  // Debug: log raw input values before combining
-  console.log(`[ApiYi][DEBUG] Raw inputs: ref_image_1=${JSON.stringify(inputs.ref_image_1)}, ref_image_2=${JSON.stringify(inputs.ref_image_2)}, ref_image_3=${JSON.stringify(inputs.ref_image_3)}, ref_images=${JSON.stringify(inputs.ref_images)}`);
-  console.log(`[ApiYi][DEBUG] node.data refs: ref_image_1=${JSON.stringify(node.data.ref_image_1)}, ref_image_2=${JSON.stringify(node.data.ref_image_2)}, ref_image_3=${JSON.stringify(node.data.ref_image_3)}, ref_images=${JSON.stringify(node.data.ref_images)}`);
-  console.log(`[ApiYi][DEBUG] All inputs keys: ${JSON.stringify(Object.keys(inputs))}`);
+  // Debug: capture raw input values for both server log and Dashboard traceLog
+  const _debug = {
+    raw_inputs: {
+      ref_image_1: inputs.ref_image_1 ?? '(undefined)',
+      ref_image_2: inputs.ref_image_2 ?? '(undefined)',
+      ref_image_3: inputs.ref_image_3 ?? '(undefined)',
+      ref_images: inputs.ref_images ?? '(undefined)',
+    },
+    node_data_refs: {
+      ref_image_1: node.data.ref_image_1 ?? '(undefined)',
+      ref_image_2: node.data.ref_image_2 ?? '(undefined)',
+      ref_image_3: node.data.ref_image_3 ?? '(undefined)',
+      ref_images: node.data.ref_images ?? '(undefined)',
+    },
+    all_input_keys: Object.keys(inputs),
+  };
+  console.log(`[ApiYi][DEBUG] Image input trace:`, JSON.stringify(_debug, null, 2));
 
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
@@ -246,6 +259,8 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
     inputs.ref_image_3 || node.data.ref_image_3,
     inputs.ref_images || node.data.ref_images || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
+  _debug.combined_images_count = combined_images.length;
+  _debug.combined_images = combined_images.map(u => u.length > 80 ? u.substring(0, 80) + '...' : u);
 
   const hasReferenceImages = combined_images.length > 0;
   let endpointUrl;
@@ -319,7 +334,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   }).filter(Boolean) || [];
 
   if (imageUrls.length === 0) throw new Error(`ApiYi did not return any generated images.`);
-  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
+  return { output_images: imageUrls, output: imageUrls, images: imageUrls, _debug };
 }
 
 export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal) {
