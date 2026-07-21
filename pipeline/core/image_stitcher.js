@@ -201,9 +201,9 @@ export async function stitchImages(imageUrls, options = {}) {
       
       let colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
       
-      // Restrict max width to 400px for col_2_3
-      if (col.key === 'col_2_3' && colW > 400) {
-        colW = 400;
+      // Restrict max width to 300px for col_2_3
+      if (col.key === 'col_2_3' && colW > 300) {
+        colW = 300;
       }
       
       let actualTotalH = 0;
