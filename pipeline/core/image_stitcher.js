@@ -148,28 +148,28 @@ export async function stitchImages(imageUrls, options = {}) {
   const finalColumns = [];
   
   for (const key of orderedKeys) {
-    if (columnsData.has(key)) finalColumns.push(columnsData.get(key));
+    if (columnsData.has(key)) finalColumns.push({ key, images: columnsData.get(key) });
   }
   
   // Add any extra columns
   for (const [key, imgs] of columnsData.entries()) {
     if (!orderedKeys.includes(key)) {
-      finalColumns.push(imgs);
+      finalColumns.push({ key, images: imgs });
     }
   }
 
   // Determine target canvas height
   let maxSingleH = 0;
   for (const col of finalColumns) {
-    if (col.length === 1) {
-      maxSingleH = Math.max(maxSingleH, col[0].height);
+    if (col.images.length === 1) {
+      maxSingleH = Math.max(maxSingleH, col.images[0].height);
     }
   }
   
   // Fallback if all columns are stacked
   if (maxSingleH === 0) {
     for (const col of finalColumns) {
-      const naturalH = col.reduce((sum, img) => sum + img.height, 0) + gap * (col.length - 1);
+      const naturalH = col.images.reduce((sum, img) => sum + img.height, 0) + gap * (col.images.length - 1);
       maxSingleH = Math.max(maxSingleH, naturalH);
     }
   }
@@ -180,7 +180,8 @@ export async function stitchImages(imageUrls, options = {}) {
   const composites = [];
   let xCursor = 0;
 
-  for (const colImages of finalColumns) {
+  for (const col of finalColumns) {
+    const colImages = col.images;
     if (colImages.length === 1) {
       // Single image in column -> scale to targetH
       const img = colImages[0];
@@ -198,14 +199,26 @@ export async function stitchImages(imageUrls, options = {}) {
         sumInvAspect += img.height / img.width;
       }
       
-      const colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
+      let colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
       
-      let yCursor = 0;
+      // Restrict max width to 400px for col_2_3
+      if (col.key === 'col_2_3' && colW > 400) {
+        colW = 400;
+      }
+      
+      let actualTotalH = 0;
+      for (const img of colImages) {
+        actualTotalH += Math.round(colW * (img.height / img.width));
+      }
+      actualTotalH += gap * (colImages.length - 1);
+      
+      let yCursor = actualTotalH < targetH ? Math.round((targetH - actualTotalH) / 2) : 0;
+      
       for (let j = 0; j < colImages.length; j++) {
         const img = colImages[j];
-        // For the last image, absorb any rounding errors to make the column exactly targetH
+        // For the last image, absorb any rounding errors ONLY if we are stretching to fit targetH
         let imgH;
-        if (j === colImages.length - 1) {
+        if (j === colImages.length - 1 && actualTotalH >= targetH) {
           imgH = Math.max(1, targetH - yCursor);
         } else {
           imgH = Math.round(colW * (img.height / img.width));
