@@ -103,8 +103,8 @@ export async function stitchImages(imageUrls, options = {}) {
     // Flatten to ensure no alpha issues, convert to PNG buffer
     const resizedBuf = await img.flatten({ background: { r: 255, g: 255, b: 255 } }).png().toBuffer();
 
-    // 3. Add number overlay
-    const labelScale = Math.max(0.8, Math.min(2.0, Math.min(w, h) / 400));
+    // 3. Add number overlay (fixed size, do not scale with image)
+    const labelScale = 1.5;
     const { svg } = createNumberSvg(labels[i] || (i + 1), labelScale);
     const numberedBuf = await sharp(resizedBuf)
       .composite([{
