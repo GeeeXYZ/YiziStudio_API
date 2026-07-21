@@ -235,6 +235,11 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   const modelId = node.data.modelId || 'gpt-image-2';
   const size = node.data.imageResolution || '1024x1024';
 
+  // Debug: log raw input values before combining
+  console.log(`[ApiYi][DEBUG] Raw inputs: ref_image_1=${JSON.stringify(inputs.ref_image_1)}, ref_image_2=${JSON.stringify(inputs.ref_image_2)}, ref_image_3=${JSON.stringify(inputs.ref_image_3)}, ref_images=${JSON.stringify(inputs.ref_images)}`);
+  console.log(`[ApiYi][DEBUG] node.data refs: ref_image_1=${JSON.stringify(node.data.ref_image_1)}, ref_image_2=${JSON.stringify(node.data.ref_image_2)}, ref_image_3=${JSON.stringify(node.data.ref_image_3)}, ref_images=${JSON.stringify(node.data.ref_images)}`);
+  console.log(`[ApiYi][DEBUG] All inputs keys: ${JSON.stringify(Object.keys(inputs))}`);
+
   let combined_images = [
     inputs.ref_image_1 || node.data.ref_image_1,
     inputs.ref_image_2 || node.data.ref_image_2,
