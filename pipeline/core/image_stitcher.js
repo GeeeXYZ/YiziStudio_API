@@ -118,96 +118,109 @@ export async function stitchImages(imageUrls, options = {}) {
     processedImages.push({ buffer: numberedBuf, width: w, height: h });
   }
 
-  // 4. Layout: 3-column fixed layout
-  //    Col 1 = image #1 (pose), full canvas height
-  //    Col 2 = image #2 (first user image), full canvas height
-  //    Col 3 = images #3+ stacked vertically, scaled to fit
-  //    For ≤2 images: side-by-side
+  // 4. Layout: Adaptive Column Layout based on labels
+  //    - '0', '1', '4' -> full columns
+  //    - '2' and '3' -> stacked in one column
+  //    - others -> their own columns
 
-  const composites = [];
-  let canvasW, canvasH;
-
-  if (processedImages.length <= 2) {
-    // Simple side-by-side layout
-    const targetH = Math.max(...processedImages.map(p => p.height));
-    let xCursor = 0;
-    for (const img of processedImages) {
-      const scale = targetH / img.height;
-      const scaledW = Math.round(img.width * scale);
-      const scaledBuf = await sharp(img.buffer).resize(scaledW, targetH, { fit: 'fill' }).png().toBuffer();
-      composites.push({ input: scaledBuf, top: 0, left: xCursor });
-      xCursor += scaledW + gap;
+  const columnsData = new Map();
+  let extraColIndex = 100;
+  
+  for (let i = 0; i < processedImages.length; i++) {
+    const img = processedImages[i];
+    const label = labels[i] || String(i + 1);
+    
+    let colKey;
+    if (label === '0' || label.startsWith('0.')) colKey = 'col_0';
+    else if (label === '1' || label.startsWith('1.')) colKey = 'col_1';
+    else if (label === '2' || label.startsWith('2.') || label === '3' || label.startsWith('3.')) colKey = 'col_2_3';
+    else if (label === '4' || label.startsWith('4.')) colKey = 'col_4';
+    else {
+      colKey = `col_extra_${extraColIndex++}`;
     }
-    canvasW = xCursor - gap;
-    canvasH = targetH;
-
-  } else {
-    // 3-column layout
-    const imgA = processedImages[0]; // pose
-    const imgB = processedImages[1]; // first user image
-    const rest = processedImages.slice(2); // remaining images
-
-    // Determine canvas height: use the taller of Col1 / Col2 at their native sizes
-    const targetH = Math.max(imgA.height, imgB.height);
-
-    // Scale Col1 and Col2 to targetH, preserving aspect ratio
-    const scaleA = targetH / imgA.height;
-    const col1W = Math.round(imgA.width * scaleA);
-    const bufA = await sharp(imgA.buffer).resize(col1W, targetH, { fit: 'fill' }).png().toBuffer();
-
-    const scaleB = targetH / imgB.height;
-    const col2W = Math.round(imgB.width * scaleB);
-    const bufB = await sharp(imgB.buffer).resize(col2W, targetH, { fit: 'fill' }).png().toBuffer();
-
-    // Col3: stack remaining images vertically
-    // First, pick a col3 width = average width of the remaining images (capped to col1W)
-    const avgRestW = Math.round(rest.reduce((s, r) => s + r.width, 0) / rest.length);
-    const col3W = Math.min(avgRestW, Math.max(col1W, col2W));
-
-    // Scale each remaining image to col3W, preserving aspect ratio
-    const col3Images = [];
-    for (const img of rest) {
-      const s = col3W / img.width;
-      const sH = Math.round(img.height * s);
-      col3Images.push({ width: col3W, height: sH, buffer: img.buffer });
-    }
-
-    // Total natural stacked height of col3
-    const col3NaturalH = col3Images.reduce((s, r) => s + r.height, 0) + gap * (col3Images.length - 1);
-
-    // If col3 stacked height differs from targetH, scale all col3 images uniformly to fit
-    const col3Scale = (col3NaturalH > 0) ? targetH / col3NaturalH : 1;
-
-    const col3Bufs = [];
-    for (const ci of col3Images) {
-      const finalW = Math.round(ci.width * col3Scale);
-      const finalH = Math.round(ci.height * col3Scale);
-      const buf = await sharp(ci.buffer).resize(finalW, finalH, { fit: 'fill' }).png().toBuffer();
-      col3Bufs.push({ buffer: buf, width: finalW, height: finalH });
-    }
-
-    // Recalculate actual col3 width after scaling
-    const actualCol3W = col3Bufs.length > 0 ? Math.max(...col3Bufs.map(b => b.width)) : 0;
-
-    // Place Col1
-    const col1X = 0;
-    composites.push({ input: bufA, top: 0, left: col1X });
-
-    // Place Col2
-    const col2X = col1W + gap;
-    composites.push({ input: bufB, top: 0, left: col2X });
-
-    // Place Col3 images stacked
-    const col3X = col2X + col2W + gap;
-    let yCursor = 0;
-    for (const ci of col3Bufs) {
-      composites.push({ input: ci.buffer, top: yCursor, left: col3X });
-      yCursor += ci.height + gap;
-    }
-
-    canvasW = col3X + actualCol3W;
-    canvasH = targetH;
+    
+    if (!columnsData.has(colKey)) columnsData.set(colKey, []);
+    columnsData.get(colKey).push(img);
   }
+
+  // Ensure stable ordering
+  const orderedKeys = ['col_0', 'col_1', 'col_2_3', 'col_4'];
+  const finalColumns = [];
+  
+  for (const key of orderedKeys) {
+    if (columnsData.has(key)) finalColumns.push(columnsData.get(key));
+  }
+  
+  // Add any extra columns
+  for (const [key, imgs] of columnsData.entries()) {
+    if (!orderedKeys.includes(key)) {
+      finalColumns.push(imgs);
+    }
+  }
+
+  // Determine target canvas height
+  let maxSingleH = 0;
+  for (const col of finalColumns) {
+    if (col.length === 1) {
+      maxSingleH = Math.max(maxSingleH, col[0].height);
+    }
+  }
+  
+  // Fallback if all columns are stacked
+  if (maxSingleH === 0) {
+    for (const col of finalColumns) {
+      const naturalH = col.reduce((sum, img) => sum + img.height, 0) + gap * (col.length - 1);
+      maxSingleH = Math.max(maxSingleH, naturalH);
+    }
+  }
+  
+  const targetH = maxSingleH > 0 ? maxSingleH : 1000;
+
+  // Build composites and determine canvas width
+  const composites = [];
+  let xCursor = 0;
+
+  for (const colImages of finalColumns) {
+    if (colImages.length === 1) {
+      // Single image in column -> scale to targetH
+      const img = colImages[0];
+      const scale = targetH / img.height;
+      const colW = Math.round(img.width * scale);
+      const buf = await sharp(img.buffer).resize(colW, targetH, { fit: 'fill' }).png().toBuffer();
+      
+      composites.push({ input: buf, top: 0, left: xCursor });
+      xCursor += colW + gap;
+    } else {
+      // Multiple images in column -> stack them, scaling uniformly to match targetH
+      const totalImageHTarget = targetH - gap * (colImages.length - 1);
+      let sumInvAspect = 0;
+      for (const img of colImages) {
+        sumInvAspect += img.height / img.width;
+      }
+      
+      const colW = Math.max(1, Math.round(totalImageHTarget / sumInvAspect));
+      
+      let yCursor = 0;
+      for (let j = 0; j < colImages.length; j++) {
+        const img = colImages[j];
+        // For the last image, absorb any rounding errors to make the column exactly targetH
+        let imgH;
+        if (j === colImages.length - 1) {
+          imgH = Math.max(1, targetH - yCursor);
+        } else {
+          imgH = Math.round(colW * (img.height / img.width));
+        }
+        
+        const buf = await sharp(img.buffer).resize(colW, imgH, { fit: 'fill' }).png().toBuffer();
+        composites.push({ input: buf, top: yCursor, left: xCursor });
+        yCursor += imgH + gap;
+      }
+      xCursor += colW + gap;
+    }
+  }
+
+  const canvasW = Math.max(1, xCursor - gap);
+  const canvasH = targetH;
 
   const resultBuffer = await sharp({
     create: {

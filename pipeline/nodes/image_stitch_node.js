@@ -13,7 +13,7 @@ export async function executeImageStitch(node, inputs, orderContext, env) {
   // Each entry: { url: string, label: string }
   const labeledImages = [];
 
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 0; i <= 4; i++) {
     const img = inputs[`image_${i}`] || node.data?.[`image_${i}`];
     if (img) {
       if (Array.isArray(img)) {
