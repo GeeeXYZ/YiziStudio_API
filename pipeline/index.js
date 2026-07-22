@@ -316,6 +316,18 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
       // All engine nodes now return a single canonical `{ output: [...] }`.
       // Skip OssOutput nodes — their images are already in finalOssImages.
       if (out.uploaded_urls || out.final_image_urls) continue;
+      // Skip intermediate/utility nodes — their outputs are NOT final deliverables.
+      // image_stitch produces a stitched composite fed INTO generation nodes.
+      // image_split produces cropped segments from a single image.
+      // order_input / toolkit_input / image_input etc. are just pipeline inputs.
+      const intermediateNodeTypes = new Set([
+        'image_stitch', 'image_split', 'color_grading',
+        'order_input', 'toolkit_input', 'text_input', 'image_input', 'float_input',
+        'prompt_board', 'string_concat', 'llm_call', 'llm_prompt_fission', 'prompt_library',
+        'text_preview', 'image_preview', 'http_request'
+      ]);
+      const nodeType = graph.nodes[nodeId]?.type;
+      if (intermediateNodeTypes.has(nodeType)) continue;
       if (out.output) {
         if (Array.isArray(out.output)) {
           rawGeneratedImages.push(...out.output.flat(Infinity).filter(isImageUrl));
