@@ -415,8 +415,9 @@ router.post('/api_pipeline/fallback_oss', authenticateToken, async (req, res) =>
 // Simulate Pipeline Execution (Dry Run)
 router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
   try {
-    let { workflow_json, sku_id, model_uuid, prompt_slots, user_prompt, user_images, model_name, order_id } = req.body;
+    let { workflow_json, sku_id, model_uuid, prompt_slots, user_prompt, user_images, model_name, order_id, set_index } = req.body;
     if (!workflow_json) return res.status(400).json({ error: 'Missing workflow_json' });
+    set_index = parseInt(set_index) || 0;
 
     let orderDbData = null;
     let actualOpenId = 'test_user';
@@ -431,7 +432,7 @@ router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
         user_prompt = user_prompt || orderDbData.prompt || '';
         sku_id = sku_id || orderDbData.planId || '';
         
-        const setIndex = 0;
+        const setIndex = set_index;
         if (orderDbData.sets && orderDbData.sets[setIndex]) {
           user_images = (user_images && user_images.length) ? user_images : (orderDbData.sets[setIndex].images || []);
           const storedSlots = orderDbData.sets[setIndex].prompt_slots || orderDbData.prompt_slots || [];
@@ -493,6 +494,7 @@ router.post('/admin/workflow/test_run', authenticateToken, async (req, res) => {
       prompt_slot_4: resolvedSlots[3] || '',
       model_name: model_name || 'Test Model',
       skuData: skuData,
+      set_index: set_index,
       stitched_image: ''
     };
 
