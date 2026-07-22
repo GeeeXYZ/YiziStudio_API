@@ -99,12 +99,13 @@ export async function executeOrderInput(node, inputs, orderContext, env, pool) {
       }
 
       if (Array.isArray(outputs.user_images)) {
-        outputs.user_images.forEach((u, idx) => {
+        for (let i = 0; i < outputs.user_images.length; i++) {
+          const u = outputs.user_images[i];
           if (typeof u === 'string' && u.trim() !== '') {
             stitchSources.push(u.trim());
-            labels.push(String(idx + 1));
+            labels.push(String(i + 1));
           }
-        });
+        }
       }
 
       if (stitchSources.length >= 2) {

@@ -102,7 +102,7 @@ export async function executeSeedream(node, inputs, env, pool, abortSignal) {
   }
 
   if (outputImages.length === 0) throw new Error('Seedream returned no images');
-  return { output_images: outputImages, output: outputImages, images: outputImages };
+  return { output: outputImages };
 }
 
 export async function executeOpenRouterPreset(node, inputs, env, pool, orderContext, abortSignal) {
@@ -119,11 +119,13 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
   const aspectRatio = node.data.aspectRatio || '';
   const imageResolution = node.data.imageResolution || '';
 
+  // Collect reference images STRICTLY from DAG wires only (same fix as ApiYi)
   let combined_images = [
-    inputs.ref_image_1 || node.data.ref_image_1,
-    inputs.ref_image_2 || node.data.ref_image_2,
-    inputs.ref_image_3 || node.data.ref_image_3,
-    inputs.ref_images || node.data.ref_images || []
+    inputs.image_1,
+    inputs.image_2,
+    inputs.image_3,
+    inputs.image_4,
+    inputs.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
   const RATIO_TO_SIZE = { '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536', '4:3': '1536x1024', '3:4': '1024x1536', '16:9': '1792x1024', '9:16': '1024x1792' };
@@ -215,7 +217,7 @@ export async function executeOpenRouterPreset(node, inputs, env, pool, orderCont
   });
 
   if (imageUrls.length === 0) throw new Error(`OpenRouter did not return any generated images.`);
-  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
+  return { output: imageUrls };
 }
 
 export async function executeApiyiPreset(node, inputs, env, pool, orderContext, abortSignal) {
@@ -235,29 +237,29 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   const modelId = node.data.modelId || 'gpt-image-2';
   const size = node.data.imageResolution || '1024x1024';
 
-  // Debug: capture raw input values for both server log and Dashboard traceLog
+  // ── Collect reference images STRICTLY from DAG wires only ──
+  // CRITICAL: Do NOT fall back to node.data for image inputs.
+  // node.data may contain stale URLs from previous saves, causing
+  // "phantom images" to appear even when no wire is connected.
+  // Only inputs.* (populated by dag_resolver from actual edges) is trustworthy.
   const _debug = {
     raw_inputs: {
-      ref_image_1: inputs.ref_image_1 ?? '(undefined)',
-      ref_image_2: inputs.ref_image_2 ?? '(undefined)',
-      ref_image_3: inputs.ref_image_3 ?? '(undefined)',
-      ref_images: inputs.ref_images ?? '(undefined)',
-    },
-    node_data_refs: {
-      ref_image_1: node.data.ref_image_1 ?? '(undefined)',
-      ref_image_2: node.data.ref_image_2 ?? '(undefined)',
-      ref_image_3: node.data.ref_image_3 ?? '(undefined)',
-      ref_images: node.data.ref_images ?? '(undefined)',
+      image_1: inputs.image_1 ?? '(undefined)',
+      image_2: inputs.image_2 ?? '(undefined)',
+      image_3: inputs.image_3 ?? '(undefined)',
+      image_4: inputs.image_4 ?? '(undefined)',
+      images_array: inputs.images_array ?? '(undefined)',
     },
     all_input_keys: Object.keys(inputs),
   };
   console.log(`[ApiYi][DEBUG] Image input trace:`, JSON.stringify(_debug, null, 2));
 
   let combined_images = [
-    inputs.ref_image_1 || node.data.ref_image_1,
-    inputs.ref_image_2 || node.data.ref_image_2,
-    inputs.ref_image_3 || node.data.ref_image_3,
-    inputs.ref_images || node.data.ref_images || []
+    inputs.image_1,
+    inputs.image_2,
+    inputs.image_3,
+    inputs.image_4,
+    inputs.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
   _debug.combined_images_count = combined_images.length;
   _debug.combined_images = combined_images.map(u => u.length > 80 ? u.substring(0, 80) + '...' : u);
@@ -334,7 +336,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   }).filter(Boolean) || [];
 
   if (imageUrls.length === 0) throw new Error(`ApiYi did not return any generated images.`);
-  return { output_images: imageUrls, output: imageUrls, images: imageUrls, _debug };
+  return { output: imageUrls, _debug };
 }
 
 export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, abortSignal) {
@@ -352,12 +354,13 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
   let prompt = inputs.prompt || inputs.input || node.data.prompt || '';
   if (Array.isArray(prompt)) prompt = prompt.filter(Boolean).join('\n');
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) prompt = 'a beautiful image';
-  
+  // Collect reference images STRICTLY from DAG wires only (same fix as ApiYi)
   let combined_images = [
-    inputs.ref_image_1 || node.data.ref_image_1,
-    inputs.ref_image_2 || node.data.ref_image_2,
-    inputs.ref_image_3 || node.data.ref_image_3,
-    inputs.ref_images || node.data.ref_image || []
+    inputs.image_1,
+    inputs.image_2,
+    inputs.image_3,
+    inputs.image_4,
+    inputs.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
   const payload = {
@@ -418,7 +421,7 @@ export async function executeGrsaiPreset(node, inputs, env, pool, orderContext, 
       
       if (pollData.status === 'succeeded' && pollData.results && pollData.results.length > 0) {
         const urls = pollData.results.map(r => r.url);
-        return { output_images: urls, output: urls };
+        return { output: urls };
       } else if (pollData.status === 'failed') {
         const errorDetail = pollData.error || pollData.message || 'Task failed internally';
         throw new Error(`Grsai Task ${taskId} failed: ${errorDetail}`);
@@ -464,15 +467,16 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
   const n = parseInt(node.data.n) || 1;
 
   let images = [];
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     const val = inputs[`image_${i}`];
     if (val !== undefined) {
       if (Array.isArray(val)) images = images.concat(val.flat().filter(Boolean));
       else if (val) images.push(val);
     }
   }
+  // Fallback: array input port
   if (images.length === 0) {
-    let legacy = inputs.images || inputs.ref_images || inputs.ref_image_1 || [];
+    let legacy = inputs.images_array || inputs.images || [];
     if (typeof legacy === 'string') legacy = [legacy];
     images = Array.isArray(legacy) ? legacy.flat().filter(Boolean) : [];
   }
@@ -577,7 +581,7 @@ export async function executeGrokImagine(node, inputs, env, pool, abortSignal) {
 
       if (outputImages.length === 0) throw new Error('Grok API returned no images');
       console.log(`[Grok] Success: ${outputImages.length} images generated`);
-      return { output_images: outputImages, output: outputImages, images: outputImages };
+      return { output: outputImages };
       
     } catch (err) {
       lastError = err;
@@ -647,11 +651,13 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
     geminiSize = getGeminiSize(sizeStr);
   }
 
+  // Collect reference images STRICTLY from DAG wires only (same fix as ApiYi)
   let combined_images = [
-    inputs.ref_image_1 || node.data.ref_image_1,
-    inputs.ref_image_2 || node.data.ref_image_2,
-    inputs.ref_image_3 || node.data.ref_image_3,
-    inputs.ref_images || node.data.ref_images || []
+    inputs.image_1,
+    inputs.image_2,
+    inputs.image_3,
+    inputs.image_4,
+    inputs.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
   let base = endpointBase.replace(/\/v1(beta)?\/?$/, '');
@@ -727,7 +733,7 @@ export async function executeNanobananaPreset(node, inputs, env, pool, orderCont
   }
 
   if (imageUrls.length === 0) throw new Error(`NanoBanana (Gemini) did not return any generated images.`);
-  return { output_images: imageUrls, output: imageUrls, images: imageUrls };
+  return { output: imageUrls };
 }
 
 /**
@@ -785,12 +791,14 @@ export async function executeApiyiGptImage2(node, inputs, env, pool, orderContex
     quality = 'auto';
   }
 
-  // ── 6. 收集参考图 (本节点的输入端口: image_1, image_2, image_3, images_array) ──
+  // ── 6. 收集参考图 (4 named ports + 1 array) ──
+  // CRITICAL: Wire-only — do NOT fall back to node.data for image inputs
   let referenceImages = [
-    inputs.image_1 || node.data.image_1,
-    inputs.image_2 || node.data.image_2,
-    inputs.image_3 || node.data.image_3,
-    inputs.images_array || node.data.images_array || []
+    inputs.image_1,
+    inputs.image_2,
+    inputs.image_3,
+    inputs.image_4,
+    inputs.images_array || []
   ].flat().filter(img => typeof img === 'string' && img.trim() !== '');
 
   // 文档限制: 最多 16 张

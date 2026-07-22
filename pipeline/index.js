@@ -313,8 +313,9 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
         if (shouldDeliver) autoDeliveredImages.push(...out.final_image_urls);
       }
       // Collect raw generated images for fallback upload.
-      // Handles both array outputs (e.g. Grok: {output: ['url1']}) and
-      // string outputs (e.g. ColorGrading: {output: 'data:image/jpeg;base64,...'}).
+      // All engine nodes now return a single canonical `{ output: [...] }`.
+      // Skip OssOutput nodes — their images are already in finalOssImages.
+      if (out.uploaded_urls || out.final_image_urls) continue;
       if (out.output) {
         if (Array.isArray(out.output)) {
           rawGeneratedImages.push(...out.output.flat(Infinity).filter(isImageUrl));
@@ -322,14 +323,9 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
           rawGeneratedImages.push(out.output);
         }
       }
-      if (out.output_images) {
-        if (Array.isArray(out.output_images)) {
-          rawGeneratedImages.push(...out.output_images.flat(Infinity).filter(isImageUrl));
-        } else if (isImageUrl(out.output_images)) {
-          rawGeneratedImages.push(out.output_images);
-        }
-      }
     }
+    // Safety dedup (e.g. if same image URL appears in multiple node outputs)
+    rawGeneratedImages = [...new Set(rawGeneratedImages)];
     console.log(`[Pipeline] Post-exec summary: ${finalOssImages.length} OSS images, ${rawGeneratedImages.length} raw images, ${allFailedUploads.length} failed uploads`);
     
     isOssSuccess = finalOssImages.length > 0;

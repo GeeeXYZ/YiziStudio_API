@@ -2,9 +2,9 @@ import OSS from 'ali-oss';
 import { uploadToOSS } from '../core/oss_helper.js';
 
 export async function executeOssOutput(node, inputs, orderContext, env) {
-  let rawImages = inputs.images || inputs.output_images || inputs.output || [];
-  if (Array.isArray(inputs.images) && inputs.images.length > 0) rawImages = inputs.images;
-  else if (Array.isArray(inputs.output_images) && inputs.output_images.length > 0) rawImages = inputs.output_images;
+  // Canonical input: `images` (from DAG edge: upstream.output → this.images)
+  // Fallback: `output` (for direct wiring without handle rename)
+  let rawImages = inputs.images || inputs.output || [];
   
   const imagesToUpload = (Array.isArray(rawImages) ? rawImages : [rawImages]).flat(Infinity);
   const filteredImages = imagesToUpload.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('data:image')));
