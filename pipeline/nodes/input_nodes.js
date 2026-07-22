@@ -12,6 +12,10 @@ export async function executeToolkitInput(node, inputs, orderContext, env, pool)
 }
 
 export async function executeOrderInput(node, inputs, orderContext, env, pool) {
+  // Diagnostic: log what images the pipeline runner passed in for this set
+  const imgPreview = (orderContext.images || []).map((u, i) => `[${i}]=${u ? u.substring(0, 60) + '...' : '(empty)'}`);
+  console.log(`[OrderInput] Set ${orderContext.set_index ?? '?'} | images count: ${(orderContext.images || []).length} | ${imgPreview.join(', ')}`);
+
   const outputs = {
     user_prompt: orderContext.prompt || '',
     user_images: orderContext.images || [],

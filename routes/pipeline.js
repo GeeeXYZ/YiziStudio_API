@@ -133,6 +133,7 @@ router.post('/api_pipeline/trigger', authenticateToken, async (req, res) => {
         const setIndex = mock_order.set_index || 0;
         if (orderData.sets && orderData.sets[setIndex]) {
           mock_order.images = mock_order.images || orderData.sets[setIndex].images || [];
+          console.log(`[Pipeline Trigger] Resolved images for set ${setIndex} from DB: count=${(mock_order.images || []).length}, preview=${JSON.stringify((mock_order.images || []).map(u => u ? u.substring(0, 60) + '...' : '(empty)'))}`);
           // Inherit stitched_image from order data if available
           if (!mock_order.stitched_image && orderData.sets[setIndex].stitched_image) {
             mock_order.stitched_image = orderData.sets[setIndex].stitched_image;

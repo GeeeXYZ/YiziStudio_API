@@ -402,7 +402,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 sku_pose_folder: resolvedPoseFolder,
                 model_uuid: data.model_uuid,
                 selectedPoseUrl: set.selectedPoseUrl || '',
-                images: (set.images && set.images.length > 0) ? set.images : (data.images || []),
+                images: set.images || [],
                 prompt: set.prompt || data.prompt || set.extra_prompt || '',
                 prompt_slot_1: (set.prompt_slots && set.prompt_slots[0]?.content) || resolvedSlots[0] || '',
                 prompt_slot_2: (set.prompt_slots && set.prompt_slots[1]?.content) || resolvedSlots[1] || '',
@@ -415,6 +415,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
 
               
               console.log(`[Auto Trigger] Starting pipeline for Order ${orderId} Set ${index}`);
+              console.log(`[Auto Trigger] Set ${index} images (${(set.images || []).length}):`, JSON.stringify((set.images || []).map(u => u ? u.substring(0, 60) + '...' : '(empty)')));
               // Fire-and-forget: starts immediately, creating event loop timers
               // that keep the Vercel function alive after res.json()
               runPipeline(pipelineInput, orderContext, pool).catch(err => {
