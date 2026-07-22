@@ -402,7 +402,7 @@ router.post('/client/order/create', authenticateToken, async (req, res) => {
                 sku_pose_folder: resolvedPoseFolder,
                 model_uuid: data.model_uuid,
                 selectedPoseUrl: set.selectedPoseUrl || '',
-                images: set.images || [],
+                images: (set.images && set.images.length > 0) ? set.images : (data.images || []),
                 prompt: set.prompt || data.prompt || set.extra_prompt || '',
                 prompt_slot_1: (set.prompt_slots && set.prompt_slots[0]?.content) || resolvedSlots[0] || '',
                 prompt_slot_2: (set.prompt_slots && set.prompt_slots[1]?.content) || resolvedSlots[1] || '',
