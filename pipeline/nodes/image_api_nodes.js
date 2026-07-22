@@ -244,15 +244,15 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
   // Only inputs.* (populated by dag_resolver from actual edges) is trustworthy.
   const _debug = {
     raw_inputs: {
-      image_1: inputs.image_1 ?? '(undefined)',
-      image_2: inputs.image_2 ?? '(undefined)',
-      image_3: inputs.image_3 ?? '(undefined)',
-      image_4: inputs.image_4 ?? '(undefined)',
-      images_array: inputs.images_array ?? '(undefined)',
+      image_1: inputs.image_1 ? `${String(inputs.image_1).substring(0, 80)}...` : '(undefined)',
+      image_2: inputs.image_2 ? `${String(inputs.image_2).substring(0, 80)}...` : '(undefined)',
+      image_3: inputs.image_3 ? `${String(inputs.image_3).substring(0, 80)}...` : '(undefined)',
+      image_4: inputs.image_4 ? `${String(inputs.image_4).substring(0, 80)}...` : '(undefined)',
+      images_array: inputs.images_array ? `[${(Array.isArray(inputs.images_array) ? inputs.images_array.length : 1)} items]` : '(undefined)',
     },
     all_input_keys: Object.keys(inputs),
   };
-  console.log(`[ApiYi][DEBUG] Image input trace:`, JSON.stringify(_debug, null, 2));
+  console.log(`[ApiYi][DEBUG] Image input trace:`, JSON.stringify(_debug));
 
   let combined_images = [
     inputs.image_1,
@@ -278,7 +278,7 @@ export async function executeApiyiPreset(node, inputs, env, pool, orderContext, 
     fd.append('response_format', 'url');
 
     // Log all reference image URLs for debugging
-    console.log(`[ApiYi] Reference images to fetch (${combined_images.length}):`, combined_images);
+    console.log(`[ApiYi] Reference images to fetch (${combined_images.length}):`, combined_images.map(u => u.substring(0, 80) + (u.length > 80 ? '...' : '')));
 
     for (let i = 0; i < combined_images.length; i++) {
       const imgUrl = combined_images[i];
