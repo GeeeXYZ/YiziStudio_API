@@ -132,9 +132,9 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
 
     if (pool && !simulate) {
       await pool.query(
-        `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at) 
-         VALUES ($1, $2, $3, $4, 0, NOW(), NOW())`,
-        [pipelineLogId, orderContext?.order_id || 'toolkit_run', 'API Workflow', `0/${nodes.length} 任务初始化`]
+        `INSERT INTO yizi_api_logs (id, order_id, model, status, progress, created_at, updated_at, set_index) 
+         VALUES ($1, $2, $3, $4, 0, NOW(), NOW(), $5)`,
+        [pipelineLogId, orderContext?.order_id || 'toolkit_run', 'API Workflow', `0/${nodes.length} 任务初始化`, orderContext?.set_index || 0]
       ).catch(e => console.warn('[Pipeline Log] Insert Error:', e.message));
     }
 
