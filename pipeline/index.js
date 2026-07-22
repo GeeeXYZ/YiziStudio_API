@@ -180,7 +180,7 @@ export async function _runPipelineInternal(workflowJson, orderContext, pool, opt
         }
 
         console.log(`[Pipeline] Executing node: ${node.type} (${node.id})`);
-        const inputs = resolveInputs(incomingEdges, context);
+        const inputs = resolveInputs(incomingEdges, context, graph);
         let outputs = {};
         
         const nodeNames = {

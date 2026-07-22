@@ -1,3 +1,5 @@
+import { getPortType, isTypeCompatible } from './node_registry.js';
+
 /**
  * Parses nodes and edges into an execution graph
  */
@@ -54,11 +56,29 @@ export function topoSort(graph) {
 /**
  * Resolve node inputs from upstream context based on incoming edges
  */
-export function resolveInputs(incomingEdges, context) {
+export function resolveInputs(incomingEdges, context, graph = null) {
   const inputs = {};
   for (const edge of incomingEdges) {
     const sourceOutputs = context[edge.source] || {};
     const val = sourceOutputs[edge.sourceHandle || 'output'];
+
+    // --- Port type validation ---
+    if (graph && val !== undefined) {
+      const sourceNode = graph.nodes[edge.source];
+      const targetNode = graph.nodes[edge.target];
+      if (sourceNode && targetNode) {
+        const sourceType = getPortType(sourceNode.type, edge.sourceHandle || 'output', 'output');
+        const targetType = getPortType(targetNode.type, edge.targetHandle, 'input');
+        if (!isTypeCompatible(sourceType, targetType)) {
+          console.warn(
+            `[DAG] ⚠️ Type mismatch: ${sourceNode.type}.${edge.sourceHandle || 'output'} (${sourceType}) → ${targetNode.type}.${edge.targetHandle} (${targetType}). ` +
+            `Value skipped to prevent data corruption. Check your workflow connections.`
+          );
+          continue; // SKIP this edge's value entirely
+        }
+      }
+    }
+
     if (val !== undefined) {
       // Append array if multiple edges connect to the same target handle
       if (inputs[edge.targetHandle] !== undefined) {
